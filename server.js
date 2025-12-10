@@ -22,6 +22,9 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Confiar en proxy (Render, Heroku, etc.)
+app.set('trust proxy', 1);
+
 // Configuración de seguridad
 app.use(helmet());
 
