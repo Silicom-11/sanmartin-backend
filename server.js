@@ -113,8 +113,8 @@ app.get('/', (req, res) => {
   });
 });
 
-// Manejo de rutas no encontradas
-app.use('*', (req, res) => {
+// Manejo de rutas no encontradas (Express 5 compatible)
+app.use((req, res, next) => {
   res.status(404).json({
     success: false,
     message: 'Endpoint no encontrado',
