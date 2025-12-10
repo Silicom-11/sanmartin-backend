@@ -21,7 +21,7 @@ router.post('/register', [
   body('password').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres'),
   body('firstName').notEmpty().withMessage('El nombre es requerido'),
   body('lastName').notEmpty().withMessage('El apellido es requerido'),
-  body('role').isIn(['padre', 'docente', 'administrativo']).withMessage('Rol inválido'),
+  body('role').isIn(['padre', 'docente', 'administrativo', 'estudiante']).withMessage('Rol inválido'),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
