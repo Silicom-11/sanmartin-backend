@@ -30,6 +30,7 @@ const Attendance = require('./Attendance');
 // ==========================================
 const Justification = require('./Justification');
 const Notification = require('./Notification');
+const Event = require('./Event');
 
 module.exports = {
   // Core (nuevos)
@@ -53,4 +54,5 @@ module.exports = {
   // Administrativos
   Justification,
   Notification,
+  Event,
 };
