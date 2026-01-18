@@ -5,6 +5,89 @@ const { body, validationResult } = require('express-validator');
 const { Grade, Course, Student } = require('../models');
 const { auth, authorize, isTeacherOrAdmin } = require('../middleware/auth');
 
+// GET /api/grades/stats - Estadísticas de calificaciones
+router.get('/stats', auth, async (req, res) => {
+  try {
+    const year = req.query.year || new Date().getFullYear();
+    const period = req.query.period || 'Primer Bimestre';
+
+    const [totalGrades, publishedGrades, gradeStats] = await Promise.all([
+      Grade.countDocuments({ academicYear: year }),
+      Grade.countDocuments({ academicYear: year, isPublished: true }),
+      Grade.aggregate([
+        { $match: { academicYear: parseInt(year), isPublished: true } },
+        { $group: {
+          _id: null,
+          avgScore: { $avg: '$averages.final' },
+          totalStudents: { $sum: 1 },
+          aprobados: { $sum: { $cond: [{ $gte: ['$averages.final', 11] }, 1, 0] } },
+          destacados: { $sum: { $cond: [{ $gte: ['$averages.final', 17] }, 1, 0] } }
+        }}
+      ])
+    ]);
+
+    const stats = gradeStats[0] || { avgScore: 0, totalStudents: 0, aprobados: 0, destacados: 0 };
+    const passingRate = stats.totalStudents > 0 ? (stats.aprobados / stats.totalStudents * 100).toFixed(1) : 0;
+
+    res.json({
+      success: true,
+      data: {
+        totalGrades,
+        publishedGrades,
+        avgScore: stats.avgScore?.toFixed(1) || 0,
+        passingRate,
+        excellentStudents: stats.destacados || 0
+      }
+    });
+  } catch (error) {
+    console.error('Get grade stats error:', error);
+    res.status(500).json({ success: false, message: 'Error al obtener estadísticas' });
+  }
+});
+
+// GET /api/grades/by-course - Calificaciones agrupadas por curso
+router.get('/by-course', auth, async (req, res) => {
+  try {
+    const year = req.query.year || new Date().getFullYear();
+
+    const courseGrades = await Grade.aggregate([
+      { $match: { academicYear: parseInt(year) } },
+      { $lookup: { from: 'courses', localField: 'course', foreignField: '_id', as: 'courseInfo' } },
+      { $unwind: '$courseInfo' },
+      { $group: {
+        _id: '$course',
+        courseName: { $first: '$courseInfo.name' },
+        gradeLevel: { $first: '$courseInfo.gradeLevel' },
+        section: { $first: '$courseInfo.section' },
+        teacher: { $first: '$teacher' },
+        studentsCount: { $sum: 1 },
+        avgScore: { $avg: '$averages.final' },
+        aprobados: { $sum: { $cond: [{ $gte: ['$averages.final', 11] }, 1, 0] } }
+      }},
+      { $lookup: { from: 'users', localField: 'teacher', foreignField: '_id', as: 'teacherInfo' } },
+      { $unwind: { path: '$teacherInfo', preserveNullAndEmptyArrays: true } },
+      { $project: {
+        _id: 1,
+        courseName: 1,
+        gradeLevel: 1,
+        section: 1,
+        teacher: { $concat: [{ $ifNull: ['$teacherInfo.firstName', ''] }, ' ', { $ifNull: ['$teacherInfo.lastName', ''] }] },
+        studentsCount: 1,
+        averageScore: { $round: ['$avgScore', 1] },
+        passingRate: { $round: [{ $multiply: [{ $divide: ['$aprobados', '$studentsCount'] }, 100] }, 0] }
+      }}
+    ]);
+
+    res.json({
+      success: true,
+      data: courseGrades
+    });
+  } catch (error) {
+    console.error('Get course grades error:', error);
+    res.status(500).json({ success: false, message: 'Error al obtener calificaciones por curso' });
+  }
+});
+
 // GET /api/grades - Listar calificaciones
 router.get('/', auth, async (req, res) => {
   try {

@@ -5,6 +5,129 @@ const { body, validationResult } = require('express-validator');
 const { Attendance, Course, Student } = require('../models');
 const { auth, authorize, isTeacherOrAdmin } = require('../middleware/auth');
 
+// GET /api/attendance/stats - Estadísticas de asistencia de hoy
+router.get('/stats', auth, async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const targetDate = req.query.date ? new Date(req.query.date) : today;
+    const endDate = new Date(targetDate);
+    endDate.setDate(endDate.getDate() + 1);
+
+    const [totalStudents, attendanceStats] = await Promise.all([
+      Student.countDocuments({ isActive: true }),
+      Attendance.aggregate([
+        { $match: { date: { $gte: targetDate, $lt: endDate } } },
+        { $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }}
+      ])
+    ]);
+
+    const stats = { present: 0, absent: 0, late: 0, justified: 0 };
+    attendanceStats.forEach(s => { stats[s._id] = s.count; });
+    
+    const totalRecorded = stats.present + stats.absent + stats.late + stats.justified;
+    const attendanceRate = totalRecorded > 0 
+      ? ((stats.present + stats.late + stats.justified) / totalRecorded * 100).toFixed(1) 
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        totalStudents,
+        present: stats.present,
+        absent: stats.absent,
+        late: stats.late,
+        justified: stats.justified,
+        attendanceRate,
+        date: targetDate.toISOString().split('T')[0]
+      }
+    });
+  } catch (error) {
+    console.error('Get attendance stats error:', error);
+    res.status(500).json({ success: false, message: 'Error al obtener estadísticas' });
+  }
+});
+
+// GET /api/attendance/by-course - Asistencia agrupada por curso
+router.get('/by-course', auth, async (req, res) => {
+  try {
+    const targetDate = req.query.date ? new Date(req.query.date) : new Date();
+    targetDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(targetDate);
+    endDate.setDate(endDate.getDate() + 1);
+
+    const courseAttendance = await Attendance.aggregate([
+      { $match: { date: { $gte: targetDate, $lt: endDate } } },
+      { $lookup: { from: 'courses', localField: 'course', foreignField: '_id', as: 'courseInfo' } },
+      { $unwind: '$courseInfo' },
+      { $lookup: { from: 'users', localField: 'teacher', foreignField: '_id', as: 'teacherInfo' } },
+      { $unwind: { path: '$teacherInfo', preserveNullAndEmptyArrays: true } },
+      { $group: {
+        _id: '$course',
+        courseName: { $first: '$courseInfo.name' },
+        gradeLevel: { $first: '$courseInfo.gradeLevel' },
+        section: { $first: '$courseInfo.section' },
+        teacher: { $first: { $concat: [{ $ifNull: ['$teacherInfo.firstName', ''] }, ' ', { $ifNull: ['$teacherInfo.lastName', ''] }] } },
+        date: { $first: '$date' },
+        present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+        absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
+        late: { $sum: { $cond: [{ $eq: ['$status', 'late'] }, 1, 0] } },
+        justified: { $sum: { $cond: [{ $eq: ['$status', 'justified'] }, 1, 0] } },
+        total: { $sum: 1 }
+      }}
+    ]);
+
+    res.json({
+      success: true,
+      data: courseAttendance
+    });
+  } catch (error) {
+    console.error('Get course attendance error:', error);
+    res.status(500).json({ success: false, message: 'Error al obtener asistencia por curso' });
+  }
+});
+
+// GET /api/attendance/alerts - Alertas de asistencia
+router.get('/alerts', auth, async (req, res) => {
+  try {
+    // Estudiantes con 3+ faltas consecutivas en el último mes
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+
+    const [frequentAbsences, frequentLates] = await Promise.all([
+      Attendance.aggregate([
+        { $match: { status: 'absent', date: { $gte: oneMonthAgo } } },
+        { $group: { _id: '$student', absences: { $sum: 1 } } },
+        { $match: { absences: { $gte: 3 } } },
+        { $count: 'total' }
+      ]),
+      Attendance.aggregate([
+        { $match: { status: 'late', date: { $gte: oneMonthAgo } } },
+        { $group: { _id: '$student', lates: { $sum: 1 } } },
+        { $match: { lates: { $gte: 5 } } },
+        { $count: 'total' }
+      ])
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        studentsWithFrequentAbsences: frequentAbsences[0]?.total || 0,
+        studentsWithFrequentLates: frequentLates[0]?.total || 0
+      }
+    });
+  } catch (error) {
+    console.error('Get attendance alerts error:', error);
+    res.status(500).json({ success: false, message: 'Error al obtener alertas' });
+  }
+});
+
 // GET /api/attendance - Listar asistencia
 router.get('/', auth, async (req, res) => {
   try {
