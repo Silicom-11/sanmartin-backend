@@ -48,13 +48,22 @@ app.use('/api/', limiter);
 // Configuración de CORS
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
-  : ['http://localhost:3000', 'http://localhost:8081'];
+  : [
+      'http://localhost:3000', 
+      'http://localhost:8081',
+      'https://sanmartin-dashboard.vercel.app',
+      'https://sanmartin-dashboard-git-main-silicom-11.vercel.app'
+    ];
 
 app.use(cors({
   origin: (origin, callback) => {
     // Permitir requests sin origin (apps móviles, Postman)
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    // Permitir todos los dominios de Vercel para preview deployments
+    if (origin && origin.includes('sanmartin-dashboard') && origin.includes('vercel.app')) {
       return callback(null, true);
     }
     return callback(new Error('No permitido por CORS'));
