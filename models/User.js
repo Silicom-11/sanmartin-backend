@@ -50,7 +50,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['padre', 'docente', 'estudiante', 'administrativo'],
+    enum: ['padre', 'docente', 'estudiante', 'administrativo', 'director'],
     required: [true, 'El rol es requerido'],
     default: 'padre',
   },
@@ -58,16 +58,79 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
-  // Relaciones
+  
+  // ==========================================
+  // RELACIONES ESPECÍFICAS POR ROL
+  // ==========================================
+  
+  // Solo para PADRES - referencia a sus hijos
+  children: [{
+    student: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Student',
+    },
+    relationship: {
+      type: String,
+      enum: ['padre', 'madre', 'tutor', 'abuelo', 'abuela', 'tio', 'tia', 'otro'],
+    },
+  }],
+  
+  // Legacy: mantener compatibilidad
   students: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Student',
   }],
+  
+  // Solo para DOCENTES - sus cursos asignados
+  assignedCourses: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CourseSection',
+  }],
+  
+  // Legacy: mantener compatibilidad
   courses: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Course',
   }],
-  // Configuración
+  
+  // Solo para ESTUDIANTES - referencia a su registro de estudiante
+  studentProfile: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student',
+  },
+  
+  // ==========================================
+  // PERMISOS ESPECIALES
+  // ==========================================
+  permissions: [{
+    type: String,
+    enum: [
+      'view_grades', 'edit_grades', 'publish_grades',
+      'view_attendance', 'edit_attendance',
+      'view_students', 'edit_students', 'delete_students',
+      'view_teachers', 'edit_teachers', 'delete_teachers',
+      'view_courses', 'edit_courses', 'delete_courses',
+      'view_reports', 'generate_reports',
+      'manage_users', 'manage_institution',
+      'view_gps', 'manage_gps',
+      'send_notifications', 'manage_notifications',
+    ],
+  }],
+  
+  // ==========================================
+  // CONFIGURACIÓN DE USUARIO
+  // ==========================================
+  settings: {
+    notifications: { type: Boolean, default: true },
+    emailNotifications: { type: Boolean, default: true },
+    pushNotifications: { type: Boolean, default: true },
+    smsNotifications: { type: Boolean, default: false },
+    language: { type: String, default: 'es' },
+    theme: { type: String, default: 'light' },
+    timezone: { type: String, default: 'America/Lima' },
+  },
+  
+  // Legacy: mantener compatibilidad
   notificationsEnabled: {
     type: Boolean,
     default: true,
@@ -76,6 +139,21 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  
+  // ==========================================
+  // PUSH TOKENS PARA NOTIFICACIONES
+  // ==========================================
+  pushTokens: [{
+    token: String,
+    device: String,           // "Samsung Galaxy S21"
+    platform: {
+      type: String,
+      enum: ['android', 'ios', 'web'],
+    },
+    lastUsed: { type: Date, default: Date.now },
+    isActive: { type: Boolean, default: true },
+  }],
+  
   // Metadata
   isActive: {
     type: Boolean,
@@ -84,8 +162,22 @@ const userSchema = new mongoose.Schema({
   lastLogin: {
     type: Date,
   },
+  loginAttempts: {
+    type: Number,
+    default: 0,
+  },
+  lockUntil: Date,
+  
   passwordResetToken: String,
   passwordResetExpires: Date,
+  
+  // Verificación de email
+  emailVerified: {
+    type: Boolean,
+    default: false,
+  },
+  emailVerificationToken: String,
+  emailVerificationExpires: Date,
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -95,6 +187,11 @@ const userSchema = new mongoose.Schema({
 // Virtual para nombre completo
 userSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
+});
+
+// Virtual para verificar si la cuenta está bloqueada
+userSchema.virtual('isLocked').get(function() {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
 // Encriptar contraseña antes de guardar
@@ -125,6 +222,110 @@ userSchema.methods.createPasswordResetToken = function() {
   
   return resetToken;
 };
+
+// ==========================================
+// MÉTODOS ESPECÍFICOS POR ROL
+// ==========================================
+
+// Para PADRES: obtener todos los hijos
+userSchema.methods.getChildren = async function() {
+  if (this.role !== 'padre') return [];
+  
+  const Student = mongoose.model('Student');
+  
+  // Buscar por la nueva estructura (children) o la legacy (students)
+  if (this.children?.length > 0) {
+    return await Student.find({
+      _id: { $in: this.children.map(c => c.student) },
+      isActive: true,
+    });
+  }
+  
+  // Legacy: buscar por students o por guardians
+  return await Student.find({
+    $or: [
+      { _id: { $in: this.students || [] } },
+      { 'guardians.user': this._id },
+      { parent: this._id },
+    ],
+    isActive: true,
+  });
+};
+
+// Para PADRES: obtener un hijo específico con sus datos académicos
+userSchema.methods.getChildWithAcademics = async function(studentId) {
+  if (this.role !== 'padre') return null;
+  
+  const children = await this.getChildren();
+  const child = children.find(c => c._id.toString() === studentId.toString());
+  
+  if (!child) return null;
+  
+  // Obtener matrícula actual
+  const enrollment = await child.getCurrentEnrollment();
+  
+  // Obtener cursos actuales
+  const courses = await child.getCurrentCourses();
+  
+  return {
+    student: child,
+    enrollment,
+    courses,
+  };
+};
+
+// Para DOCENTES: obtener todos los cursos asignados
+userSchema.methods.getAssignedCourses = async function() {
+  if (this.role !== 'docente') return [];
+  
+  const CourseSection = mongoose.model('CourseSection');
+  
+  return await CourseSection.find({
+    $or: [
+      { _id: { $in: this.assignedCourses || [] } },
+      { teacher: this._id },
+    ],
+    isActive: true,
+  }).populate(['subject', 'classroom']);
+};
+
+// Para DOCENTES: obtener estudiantes de un curso específico
+userSchema.methods.getCourseStudents = async function(courseSectionId) {
+  if (this.role !== 'docente') return [];
+  
+  const CourseSection = mongoose.model('CourseSection');
+  const course = await CourseSection.findById(courseSectionId);
+  
+  if (!course) return [];
+  
+  return await course.getStudents();
+};
+
+// Para ESTUDIANTES: obtener su información académica
+userSchema.methods.getStudentAcademics = async function() {
+  if (this.role !== 'estudiante' || !this.studentProfile) return null;
+  
+  const Student = mongoose.model('Student');
+  const student = await Student.findById(this.studentProfile);
+  
+  if (!student) return null;
+  
+  const enrollment = await student.getCurrentEnrollment();
+  const courses = await student.getCurrentCourses();
+  
+  return {
+    student,
+    enrollment,
+    courses,
+  };
+};
+
+// Índices
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ role: 1 });
+userSchema.index({ 'children.student': 1 });
+userSchema.index({ studentProfile: 1 });
+userSchema.index({ isActive: 1 });
 
 const User = mongoose.model('User', userSchema);
 

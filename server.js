@@ -18,6 +18,12 @@ const justificationRoutes = require('./routes/justificationRoutes');
 const courseRoutes = require('./routes/courseRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
+// Nuevas rutas para arquitectura mejorada
+const institutionRoutes = require('./routes/institutionRoutes');
+const classroomRoutes = require('./routes/classroomRoutes');
+const enrollmentRoutes = require('./routes/enrollmentRoutes');
+const courseSectionRoutes = require('./routes/courseSectionRoutes');
+const parentRoutes = require('./routes/parentRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -85,6 +91,12 @@ app.use('/api/justifications', justificationRoutes);
 app.use('/api/courses', courseRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+// Nuevas rutas para arquitectura mejorada
+app.use('/api/institution', institutionRoutes);
+app.use('/api/classrooms', classroomRoutes);
+app.use('/api/enrollments', enrollmentRoutes);
+app.use('/api/course-sections', courseSectionRoutes);
+app.use('/api/parent', parentRoutes);
 
 // Ruta de salud del servidor
 app.get('/api/health', (req, res) => {
@@ -100,7 +112,7 @@ app.get('/api/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     name: 'San Martín Digital API',
-    version: '1.0.0',
+    version: '2.0.0',
     description: 'Backend del Sistema de Gestión Académica - I.E. San Martín de Porres',
     endpoints: {
       health: '/api/health',
@@ -112,6 +124,12 @@ app.get('/', (req, res) => {
       courses: '/api/courses',
       notifications: '/api/notifications',
       dashboard: '/api/dashboard',
+      // Nuevos endpoints
+      institution: '/api/institution',
+      classrooms: '/api/classrooms',
+      enrollments: '/api/enrollments',
+      courseSections: '/api/course-sections',
+      parent: '/api/parent',
     },
   });
 });
