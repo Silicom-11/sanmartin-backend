@@ -8,18 +8,21 @@ const { auth, authorize, isTeacherOrAdmin } = require('../middleware/auth');
 // GET /api/courses/stats - Estadísticas de cursos
 router.get('/stats', auth, async (req, res) => {
   try {
-    const [totalCourses, activeCourses, totalStudents, coursesWithStudents] = await Promise.all([
-      Course.countDocuments(),
-      Course.countDocuments({ isActive: true }),
-      Student.countDocuments({ isActive: true }),
-      Course.aggregate([
+    const totalCourses = await Course.countDocuments() || 0;
+    const activeCourses = await Course.countDocuments({ isActive: true }) || 0;
+    const totalStudents = await Student.countDocuments({ isActive: true }) || 0;
+    
+    let avgPerCourse = 0;
+    try {
+      const coursesWithStudents = await Course.aggregate([
         { $match: { isActive: true } },
         { $project: { studentsCount: { $size: { $ifNull: ['$students', []] } } } },
         { $group: { _id: null, totalStudentsInCourses: { $sum: '$studentsCount' }, avgStudentsPerCourse: { $avg: '$studentsCount' } } }
-      ])
-    ]);
-
-    const avgPerCourse = coursesWithStudents[0]?.avgStudentsPerCourse || 0;
+      ]);
+      avgPerCourse = coursesWithStudents[0]?.avgStudentsPerCourse || 0;
+    } catch (aggError) {
+      console.log('Aggregation skipped:', aggError.message);
+    }
 
     res.json({
       success: true,
@@ -32,7 +35,7 @@ router.get('/stats', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Get course stats error:', error);
-    res.status(500).json({ success: false, message: 'Error al obtener estadísticas' });
+    res.status(500).json({ success: false, message: 'Error al obtener estadísticas', error: error.message });
   }
 });
 
