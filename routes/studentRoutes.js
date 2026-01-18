@@ -5,6 +5,30 @@ const { body, validationResult } = require('express-validator');
 const { Student, User } = require('../models');
 const { auth, authorize, isParentOf } = require('../middleware/auth');
 
+// GET /api/students/my-children - Obtener hijos del padre autenticado
+router.get('/my-children', auth, authorize('padre'), async (req, res) => {
+  try {
+    const students = await Student.find({
+      parent: req.userId,
+      isActive: true,
+    })
+      .populate('courses', 'name code')
+      .sort({ firstName: 1 });
+
+    res.json({
+      success: true,
+      count: students.length,
+      data: students,
+    });
+  } catch (error) {
+    console.error('Get my children error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener hijos',
+    });
+  }
+});
+
 // GET /api/students - Listar estudiantes
 router.get('/', auth, async (req, res) => {
   try {

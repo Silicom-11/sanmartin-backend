@@ -39,6 +39,30 @@ router.get('/stats', auth, async (req, res) => {
   }
 });
 
+// GET /api/courses/my-courses - Obtener cursos del docente autenticado
+router.get('/my-courses', auth, authorize('docente'), async (req, res) => {
+  try {
+    const courses = await Course.find({
+      teacher: req.userId,
+      isActive: true,
+    })
+      .populate('students', 'firstName lastName enrollmentNumber')
+      .sort({ name: 1 });
+
+    res.json({
+      success: true,
+      count: courses.length,
+      data: courses,
+    });
+  } catch (error) {
+    console.error('Get my courses error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener mis cursos',
+    });
+  }
+});
+
 // GET /api/courses - Listar cursos
 router.get('/', auth, async (req, res) => {
   try {
@@ -200,6 +224,33 @@ router.put('/:id', auth, authorize('administrativo'), async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al actualizar curso',
+    });
+  }
+});
+
+// GET /api/courses/:id/students - Obtener estudiantes del curso
+router.get('/:id/students', auth, async (req, res) => {
+  try {
+    const course = await Course.findById(req.params.id)
+      .populate('students', 'firstName lastName enrollmentNumber dni gradeLevel section');
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Curso no encontrado',
+      });
+    }
+
+    res.json({
+      success: true,
+      count: course.students?.length || 0,
+      data: course.students || [],
+    });
+  } catch (error) {
+    console.error('Get course students error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener estudiantes del curso',
     });
   }
 });

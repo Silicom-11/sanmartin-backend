@@ -253,24 +253,114 @@ router.get('/admin', auth, authorize('administrativo'), async (req, res) => {
 // GET /api/dashboard/student - Dashboard para estudiantes
 router.get('/student', auth, authorize('estudiante'), async (req, res) => {
   try {
-    // Buscar estudiante asociado al usuario
-    const student = await Student.findOne({ 
-      // En un sistema real, habría una relación user-student
-      // Por ahora, asumimos que el estudiante se busca por email
-    }).populate('courses', 'name code schedule');
+    const userId = req.userId;
+    const year = new Date().getFullYear();
+    const startDate = new Date(year, 0, 1);
+    const endDate = new Date();
 
-    // Datos de ejemplo
-    const data = {
-      upcomingClasses: [],
-      recentGrades: [],
-      attendanceRate: 0,
-      pendingTasks: 0,
-      unreadMessages: 0,
+    // Buscar estudiante asociado al usuario
+    const student = await Student.findOne({ user: userId })
+      .populate('courses', 'name code schedule');
+
+    // Si no hay estudiante vinculado, crear datos básicos
+    const studentData = student || { 
+      _id: userId,
+      firstName: req.user.firstName,
+      lastName: req.user.lastName,
+      courses: [],
     };
+
+    // Obtener cursos del estudiante
+    const courses = student?.courses || [];
+    const courseIds = courses.map(c => c._id);
+
+    // Últimas calificaciones
+    const recentGrades = await Grade.find({
+      student: student?._id || userId,
+      academicYear: year,
+    })
+      .populate('course', 'name')
+      .sort({ updatedAt: -1 })
+      .limit(5);
+
+    // Formatear calificaciones recientes
+    const formattedGrades = [];
+    recentGrades.forEach(grade => {
+      if (grade.evaluations && grade.evaluations.length > 0) {
+        grade.evaluations.forEach(eval => {
+          if (eval.score !== undefined) {
+            formattedGrades.push({
+              _id: grade._id.toString() + '_' + (eval._id || Math.random()),
+              courseName: grade.course?.name || 'Sin curso',
+              evaluationName: eval.name || 'Evaluación',
+              score: eval.score,
+              date: eval.date,
+            });
+          }
+        });
+      }
+    });
+
+    // Estadísticas de asistencia
+    let attendanceStats = { rate: 0 };
+    if (student?._id) {
+      try {
+        attendanceStats = await Attendance.getStudentAttendanceStats(
+          student._id,
+          startDate,
+          endDate
+        );
+      } catch (e) {
+        console.log('Attendance stats error:', e.message);
+      }
+    }
+
+    // Calcular promedio general
+    const allGrades = await Grade.find({
+      student: student?._id || userId,
+      academicYear: year,
+      isPublished: true,
+    });
+    
+    let avgSum = 0;
+    let avgCount = 0;
+    allGrades.forEach(g => {
+      if (g.averages && g.averages.final) {
+        avgSum += g.averages.final;
+        avgCount++;
+      }
+    });
+    const average = avgCount > 0 ? (avgSum / avgCount).toFixed(1) : '-';
+
+    // Notificaciones no leídas
+    const unreadNotifications = await Notification.countDocuments({
+      recipient: userId,
+      isRead: false,
+    });
 
     res.json({
       success: true,
-      data,
+      data: {
+        student: {
+          _id: studentData._id,
+          firstName: studentData.firstName,
+          lastName: studentData.lastName,
+          gradeLevel: studentData.gradeLevel,
+          section: studentData.section,
+        },
+        courses: courses.map(c => ({
+          _id: c._id,
+          name: c.name,
+          code: c.code,
+          schedule: c.schedule,
+        })),
+        recentGrades: formattedGrades.slice(0, 5),
+        attendanceStats: {
+          average,
+          rate: attendanceStats.attendanceRate || 0,
+        },
+        unreadNotifications,
+      },
     });
   } catch (error) {
     console.error('Student dashboard error:', error);

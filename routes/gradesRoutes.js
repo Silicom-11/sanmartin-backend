@@ -191,6 +191,77 @@ router.get('/course/:courseId', auth, isTeacherOrAdmin, async (req, res) => {
   }
 });
 
+// GET /api/grades/history/:studentId - Historial de calificaciones de un estudiante
+router.get('/history/:studentId', auth, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const year = req.query.year || new Date().getFullYear();
+
+    // Obtener todas las calificaciones del estudiante
+    const grades = await Grade.find({
+      student: studentId,
+      academicYear: parseInt(year),
+    })
+      .populate('course', 'name code gradeLevel')
+      .populate('teacher', 'firstName lastName')
+      .sort({ 'course.name': 1 });
+
+    // Transformar datos para la app móvil
+    const history = [];
+    let totalSum = 0;
+    let totalCount = 0;
+
+    grades.forEach(grade => {
+      if (grade.evaluations && grade.evaluations.length > 0) {
+        grade.evaluations.forEach(eval => {
+          if (eval.score !== undefined && eval.score !== null) {
+            history.push({
+              _id: grade._id.toString() + '_' + eval._id,
+              courseId: grade.course?._id,
+              courseName: grade.course?.name || 'Sin curso',
+              evaluationName: eval.name || 'Evaluación',
+              evaluationType: eval.type || 'exam',
+              score: eval.score,
+              date: eval.date,
+              period: grade.period,
+            });
+            totalSum += eval.score;
+            totalCount++;
+          }
+        });
+      }
+      // Si tiene promedio final, también incluirlo
+      if (grade.averages && grade.averages.final) {
+        totalSum += grade.averages.final;
+        totalCount++;
+      }
+    });
+
+    const average = totalCount > 0 ? (totalSum / totalCount) : 0;
+
+    // Agrupar por curso
+    const courses = [...new Set(history.map(h => h.courseName))].map(name => ({
+      name,
+      grades: history.filter(h => h.courseName === name),
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        average: average.toFixed(1),
+        history,
+        courses,
+      },
+    });
+  } catch (error) {
+    console.error('Get grades history error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener historial de calificaciones',
+    });
+  }
+});
+
 // POST /api/grades - Crear/actualizar calificaciones
 router.post('/', auth, isTeacherOrAdmin, [
   body('studentId').notEmpty().withMessage('El estudiante es requerido'),
