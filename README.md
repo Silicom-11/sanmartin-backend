@@ -1,6 +1,12 @@
-# San Martín Digital - Backend API
+# San Martín Digital - Backend API v2.0
 
 Sistema de Gestión Académica para la I.E. San Martín de Porres
+
+**Nueva arquitectura con soporte para:**
+- 🔄 Padre con múltiples hijos en diferentes grados
+- 📊 Sistema de evaluación configurable (bimestral, trimestral, semestral)
+- 🎓 Matrícula por año académico
+- 📚 Cursos-sección con profesores asignados
 
 ## 🚀 Inicio Rápido
 
@@ -21,6 +27,18 @@ npm run dev
 npm start
 ```
 
+### Seeding (Primera vez)
+
+```bash
+# Poblar la base de datos con datos de prueba
+node seeds/seed.js
+```
+
+**Credenciales de prueba:**
+- Admin: `admin@sanmartin.edu.pe` / `password123`
+- Docente: `maria.gonzalez@sanmartin.edu.pe` / `password123`
+- Padre: `padre@demo.com` / `password123` (Tiene 2 hijos: María y Pedro)
+
 ## 📚 Endpoints de la API
 
 ### Autenticación (`/api/auth`)
@@ -31,6 +49,53 @@ npm start
 - `PUT /profile` - Actualizar perfil
 - `POST /forgot-password` - Solicitar reset de contraseña
 - `POST /change-password` - Cambiar contraseña
+
+### 🆕 Institución (`/api/institution`)
+- `GET /` - Obtener configuración de la institución
+- `PUT /` - Actualizar configuración
+- `GET /academic-years` - Listar años académicos
+- `GET /academic-years/current` - Año académico actual
+- `POST /academic-years` - Crear año académico
+- `PUT /academic-years/:id/activate` - Activar año académico
+- `GET /grade-levels` - Listar grados
+- `GET /subjects` - Listar asignaturas
+- `POST /subjects` - Crear asignatura
+
+### 🆕 Aulas (`/api/classrooms`)
+- `GET /` - Listar aulas (filtros: academicYear, gradeLevel, shift, section)
+- `GET /:id` - Obtener aula específica
+- `GET /:id/students` - Estudiantes del aula
+- `GET /:id/courses` - Cursos del aula
+- `POST /` - Crear aula
+- `PUT /:id` - Actualizar aula
+- `PUT /:id/tutor` - Asignar tutor
+- `DELETE /:id` - Eliminar aula
+
+### 🆕 Matrículas (`/api/enrollments`)
+- `GET /` - Listar matrículas
+- `GET /student/:studentId` - Matrículas de un estudiante
+- `GET /student/:studentId/current` - Matrícula actual del estudiante
+- `POST /` - Crear matrícula
+- `PUT /:id/status` - Cambiar estado de matrícula
+- `PUT /:id/transfer` - Trasladar estudiante a otra aula
+
+### 🆕 Cursos-Sección (`/api/course-sections`)
+- `GET /` - Listar cursos-sección
+- `GET /teacher/:teacherId` - Cursos de un docente
+- `GET /:id` - Obtener curso-sección específico
+- `GET /:id/students` - Estudiantes del curso
+- `POST /` - Crear curso-sección
+- `PUT /:id` - Actualizar curso-sección
+- `PUT /:id/teacher` - Cambiar docente
+- `DELETE /:id` - Eliminar curso-sección
+
+### 🆕 Padres (`/api/parent`)
+- `GET /children` - Obtener lista de hijos del padre logueado
+- `GET /children/:childId` - Datos completos de un hijo
+- `GET /children/:childId/courses` - Cursos del hijo
+- `GET /children/:childId/grades` - Notas del hijo
+- `GET /children/:childId/attendance` - Asistencia del hijo
+- `GET /children/:childId/schedule` - Horario del hijo
 
 ### Estudiantes (`/api/students`)
 - `GET /` - Listar estudiantes
