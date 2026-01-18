@@ -39,8 +39,8 @@ const justificationSchema = new mongoose.Schema({
   // Estado de la solicitud
   status: {
     type: String,
-    enum: ['pendiente', 'aprobada', 'rechazada'],
-    default: 'pendiente',
+    enum: ['pending', 'approved', 'rejected', 'pendiente', 'aprobada', 'rechazada'],
+    default: 'pending',
   },
   // Revisión
   reviewedBy: {
@@ -48,7 +48,7 @@ const justificationSchema = new mongoose.Schema({
     ref: 'User',
   },
   reviewedAt: Date,
-  reviewNotes: String,
+  reviewNote: String,
 }, {
   timestamps: true,
 });

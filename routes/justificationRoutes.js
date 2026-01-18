@@ -58,13 +58,36 @@ router.get('/', auth, async (req, res) => {
     res.json({
       success: true,
       count: justifications.length,
-      data: { justifications },
+      data: justifications,
     });
   } catch (error) {
     console.error('Get justifications error:', error);
     res.status(500).json({
       success: false,
       message: 'Error al obtener justificaciones',
+    });
+  }
+});
+
+// GET /api/justifications/stats - Estadísticas de justificaciones
+router.get('/stats', auth, authorize('administrativo', 'docente'), async (req, res) => {
+  try {
+    const [total, pending, approved, rejected] = await Promise.all([
+      Justification.countDocuments(),
+      Justification.countDocuments({ status: 'pending' }),
+      Justification.countDocuments({ status: 'approved' }),
+      Justification.countDocuments({ status: 'rejected' }),
+    ]);
+
+    res.json({
+      success: true,
+      data: { total, pending, approved, rejected },
+    });
+  } catch (error) {
+    console.error('Get justifications stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener estadísticas',
     });
   }
 });
@@ -170,16 +193,27 @@ router.post('/', auth, authorize('padre'), upload.array('documents', 3), [
 
 // PUT /api/justifications/:id/review - Revisar justificación (admin/docente)
 router.put('/:id/review', auth, authorize('administrativo', 'docente'), [
-  body('status').isIn(['aprobada', 'rechazada']).withMessage('Estado inválido'),
+  body('status').isIn(['approved', 'rejected', 'aprobada', 'rechazada']).withMessage('Estado inválido'),
 ], async (req, res) => {
   try {
-    const { status, reviewNotes } = req.body;
+    const { status, reviewNote, reviewNotes } = req.body;
+    
+    // Normalizar el estado
+    let normalizedStatus = status;
+    if (status === 'aprobada' || status === 'approved') {
+      normalizedStatus = 'approved';
+    } else if (status === 'rechazada' || status === 'rejected') {
+      normalizedStatus = 'rejected';
+    }
+    
+    // Usar reviewNote o reviewNotes
+    const note = reviewNote || reviewNotes || '';
 
     const justification = await Justification.findByIdAndUpdate(
       req.params.id,
       {
-        status,
-        reviewNotes,
+        status: normalizedStatus,
+        reviewNote: note,
         reviewedBy: req.userId,
         reviewedAt: new Date(),
       },
@@ -194,7 +228,7 @@ router.put('/:id/review', auth, authorize('administrativo', 'docente'), [
     }
 
     // Si se aprueba, actualizar los registros de asistencia
-    if (status === 'aprobada') {
+    if (normalizedStatus === 'approved') {
       for (const date of justification.dates) {
         await Attendance.updateMany(
           {

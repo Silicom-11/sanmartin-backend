@@ -18,6 +18,7 @@ const justificationRoutes = require('./routes/justificationRoutes');
 const courseRoutes = require('./routes/courseRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
+const usersRoutes = require('./routes/usersRoutes');
 // Nuevas rutas para arquitectura mejorada
 const institutionRoutes = require('./routes/institutionRoutes');
 const classroomRoutes = require('./routes/classroomRoutes');
@@ -93,6 +94,7 @@ const connectDB = async () => {
 
 // Rutas de la API
 app.use('/api/auth', authRoutes);
+app.use('/api/users', usersRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/grades', gradesRoutes);
 app.use('/api/attendance', attendanceRoutes);
