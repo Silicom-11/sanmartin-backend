@@ -162,7 +162,7 @@ router.post('/', auth, authorize('administrativo'), [
 });
 
 // POST /api/notifications/broadcast - Enviar a múltiples usuarios
-router.post('/broadcast', auth, authorize('administrativo'), [
+router.post('/broadcast', auth, authorize('administrativo', 'docente'), [
   body('title').notEmpty().withMessage('El título es requerido'),
   body('message').notEmpty().withMessage('El mensaje es requerido'),
 ], async (req, res) => {
@@ -176,6 +176,10 @@ router.post('/broadcast', auth, authorize('administrativo'), [
     } else if (roles && roles.length > 0) {
       const users = await User.find({ role: { $in: roles }, isActive: true });
       recipients = users.map(u => u._id);
+    } else {
+      // Si no se especifican roles ni recipientIds, enviar a todos los usuarios activos
+      const users = await User.find({ isActive: true });
+      recipients = users.map(u => u._id);
     }
 
     if (recipients.length === 0) {
@@ -185,15 +189,22 @@ router.post('/broadcast', auth, authorize('administrativo'), [
       });
     }
 
-    await Notification.createBulk(recipients, {
+    // Crear notificaciones en masa
+    const notifications = recipients.map(recipientId => ({
+      recipient: recipientId,
       title,
       message,
       type: type || 'info',
-    });
+      isRead: false,
+      createdAt: new Date()
+    }));
+
+    await Notification.insertMany(notifications);
 
     res.json({
       success: true,
       message: `Notificación enviada a ${recipients.length} usuarios`,
+      data: { recipientCount: recipients.length }
     });
   } catch (error) {
     console.error('Broadcast notification error:', error);

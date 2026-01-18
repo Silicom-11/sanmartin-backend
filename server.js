@@ -25,6 +25,7 @@ const classroomRoutes = require('./routes/classroomRoutes');
 const enrollmentRoutes = require('./routes/enrollmentRoutes');
 const courseSectionRoutes = require('./routes/courseSectionRoutes');
 const parentRoutes = require('./routes/parentRoutes');
+const eventsRoutes = require('./routes/eventsRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -108,6 +109,7 @@ app.use('/api/classrooms', classroomRoutes);
 app.use('/api/enrollments', enrollmentRoutes);
 app.use('/api/course-sections', courseSectionRoutes);
 app.use('/api/parent', parentRoutes);
+app.use('/api/events', eventsRoutes);
 
 // Ruta de salud del servidor
 app.get('/api/health', (req, res) => {
