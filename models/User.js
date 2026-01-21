@@ -168,6 +168,30 @@ const userSchema = new mongoose.Schema({
   },
   lockUntil: Date,
   
+  // ==========================================
+  // ESTADO ONLINE Y UBICACIÓN
+  // ==========================================
+  isOnline: {
+    type: Boolean,
+    default: false,
+  },
+  lastActive: {
+    type: Date,
+  },
+  lastKnownLocation: {
+    latitude: Number,
+    longitude: Number,
+    accuracy: Number,
+    timestamp: Date,
+    address: String,
+  },
+  
+  // Configuración de tracking
+  locationTrackingEnabled: {
+    type: Boolean,
+    default: true,
+  },
+  
   passwordResetToken: String,
   passwordResetExpires: Date,
   

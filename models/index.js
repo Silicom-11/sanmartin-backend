@@ -32,6 +32,17 @@ const Justification = require('./Justification');
 const Notification = require('./Notification');
 const Event = require('./Event');
 
+// ==========================================
+// MODELOS DE MENSAJERÍA
+// ==========================================
+const Conversation = require('./Conversation');
+const Message = require('./Message');
+
+// ==========================================
+// MODELOS DE SEGURIDAD Y TRACKING
+// ==========================================
+const Location = require('./Location');
+
 module.exports = {
   // Core (nuevos)
   Institution,
@@ -55,4 +66,11 @@ module.exports = {
   Justification,
   Notification,
   Event,
+  
+  // Mensajería
+  Conversation,
+  Message,
+  
+  // Seguridad y Tracking
+  Location,
 };

@@ -258,8 +258,8 @@ router.get('/student', auth, authorize('estudiante'), async (req, res) => {
     const startDate = new Date(year, 0, 1);
     const endDate = new Date();
 
-    // Buscar estudiante asociado al usuario
-    const student = await Student.findOne({ user: userId })
+    // Buscar estudiante asociado al usuario (campo correcto: userAccount)
+    const student = await Student.findOne({ userAccount: userId })
       .populate('courses', 'name code schedule');
 
     // Si no hay estudiante vinculado, crear datos básicos
