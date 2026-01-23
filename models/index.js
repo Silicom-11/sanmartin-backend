@@ -17,6 +17,8 @@ const Enrollment = require('./Enrollment');
 // ==========================================
 const User = require('./User');
 const Student = require('./Student');
+const Teacher = require('./Teacher');
+const Parent = require('./Parent');
 
 // ==========================================
 // MODELOS ACADÉMICOS
@@ -56,6 +58,8 @@ module.exports = {
   // Usuarios
   User,
   Student,
+  Teacher,
+  Parent,
   
   // Académicos
   Course,       // Legacy

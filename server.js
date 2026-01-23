@@ -29,6 +29,9 @@ const eventsRoutes = require('./routes/eventsRoutes');
 const academicSettingsRoutes = require('./routes/academicSettingsRoutes');
 const messagesRoutes = require('./routes/messagesRoutes');
 const locationRoutes = require('./routes/locationRoutes');
+// CRUD de Docentes y Padres (nuevas colecciones)
+const teacherRoutes = require('./routes/teacherRoutes');
+const parentsManagementRoutes = require('./routes/parentsManagementRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -116,6 +119,9 @@ app.use('/api/events', eventsRoutes);
 app.use('/api/academic-settings', academicSettingsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/location', locationRoutes);
+// CRUD de Docentes y Padres (nuevas colecciones)
+app.use('/api/teachers', teacherRoutes);
+app.use('/api/parents-management', parentsManagementRoutes);
 
 // Ruta de salud del servidor
 app.get('/api/health', (req, res) => {
@@ -149,6 +155,9 @@ app.get('/', (req, res) => {
       enrollments: '/api/enrollments',
       courseSections: '/api/course-sections',
       parent: '/api/parent',
+      // CRUD Docentes y Padres
+      teachers: '/api/teachers',
+      parentsManagement: '/api/parents-management',
     },
   });
 });
