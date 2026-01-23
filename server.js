@@ -29,9 +29,10 @@ const eventsRoutes = require('./routes/eventsRoutes');
 const academicSettingsRoutes = require('./routes/academicSettingsRoutes');
 const messagesRoutes = require('./routes/messagesRoutes');
 const locationRoutes = require('./routes/locationRoutes');
-// CRUD de Docentes y Padres (nuevas colecciones)
+// CRUD de Docentes, Padres y Estudiantes (nuevas colecciones)
 const teacherRoutes = require('./routes/teacherRoutes');
 const parentsManagementRoutes = require('./routes/parentsManagementRoutes');
+const studentsManagementRoutes = require('./routes/studentsManagementRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -119,9 +120,10 @@ app.use('/api/events', eventsRoutes);
 app.use('/api/academic-settings', academicSettingsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/location', locationRoutes);
-// CRUD de Docentes y Padres (nuevas colecciones)
+// CRUD de Docentes, Padres y Estudiantes (nuevas colecciones)
 app.use('/api/teachers', teacherRoutes);
 app.use('/api/parents-management', parentsManagementRoutes);
+app.use('/api/students-management', studentsManagementRoutes);
 
 // Ruta de salud del servidor
 app.get('/api/health', (req, res) => {

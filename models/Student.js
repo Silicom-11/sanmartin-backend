@@ -1,13 +1,18 @@
 // Modelo de Estudiante - San Martín Digital
-// ACTUALIZADO: Nueva arquitectura con múltiples tutores y relación con Enrollment
+// ACTUALIZADO: Nueva arquitectura con múltiples tutores, autenticación y relación con Enrollment
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 // Subdocumento para tutores/apoderados
 const guardianSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+  },
+  parent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Parent',
   },
   relationship: {
     type: String,
@@ -29,6 +34,29 @@ const guardianSchema = new mongoose.Schema({
 }, { _id: false });
 
 const studentSchema = new mongoose.Schema({
+  // ==========================================
+  // DATOS DE AUTENTICACIÓN
+  // ==========================================
+  email: {
+    type: String,
+    required: [true, 'El correo es requerido'],
+    unique: true,
+    trim: true,
+    lowercase: true,
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Correo inválido'],
+  },
+  password: {
+    type: String,
+    required: [true, 'La contraseña es requerida'],
+    minlength: [6, 'La contraseña debe tener al menos 6 caracteres'],
+    select: false,
+  },
+  studentCode: {
+    type: String,
+    unique: true,
+    sparse: true,
+  },
+  
   // Datos personales
   firstName: {
     type: String,
@@ -52,7 +80,7 @@ const studentSchema = new mongoose.Schema({
   },
   gender: {
     type: String,
-    enum: ['M', 'F'],
+    enum: ['Masculino', 'Femenino'],
     required: true,
   },
   photo: {
@@ -70,11 +98,6 @@ const studentSchema = new mongoose.Schema({
   phone: {
     type: String,
     trim: true,
-  },
-  email: {
-    type: String,
-    trim: true,
-    lowercase: true,
   },
   
   // ==========================================
@@ -225,29 +248,97 @@ studentSchema.methods.getCurrentCourses = async function() {
   }).populate(['subject', 'teacher']);
 };
 
-// Generar número de matrícula automáticamente
+// Generar número de matrícula y código de estudiante automáticamente
 studentSchema.pre('save', async function(next) {
+  // Generar código de estudiante si no existe
+  if (!this.studentCode) {
+    const year = new Date().getFullYear();
+    const count = await this.constructor.countDocuments();
+    this.studentCode = `EST-${year}-${String(count + 1).padStart(4, '0')}`;
+  }
+  
   if (!this.enrollmentNumber) {
     const year = new Date().getFullYear();
     const count = await this.constructor.countDocuments();
     this.enrollmentNumber = `SMP-${year}-${String(count + 1).padStart(4, '0')}`;
   }
   
+  // Hashear password si fue modificada
+  if (this.isModified('password')) {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+  }
+  
   // Sincronizar parent con el guardian primario
   if (this.guardians?.length > 0 && !this.parent) {
     const primary = this.guardians.find(g => g.isPrimary) || this.guardians[0];
-    this.parent = primary.user;
+    this.parent = primary.user || primary.parent;
   }
   
   next();
 });
 
+// ==========================================
+// MÉTODOS DE AUTENTICACIÓN
+// ==========================================
+
+// Comparar contraseña
+studentSchema.methods.comparePassword = async function(candidatePassword) {
+  return await bcrypt.compare(candidatePassword, this.password);
+};
+
+// Generar JWT
+studentSchema.methods.generateAuthToken = function() {
+  return jwt.sign(
+    { id: this._id, role: 'estudiante', type: 'student' },
+    process.env.JWT_SECRET || 'sanmartin_secret_key_2026',
+    { expiresIn: '7d' }
+  );
+};
+
+// Retornar datos para autenticación (sin password)
+studentSchema.methods.toAuthJSON = function() {
+  return {
+    _id: this._id,
+    studentCode: this.studentCode,
+    email: this.email,
+    firstName: this.firstName,
+    lastName: this.lastName,
+    fullName: this.fullName,
+    dni: this.dni,
+    photo: this.photo,
+    gradeLevel: this.gradeLevel,
+    section: this.section,
+    role: 'estudiante',
+    token: this.generateAuthToken(),
+  };
+};
+
+// Método estático para buscar por credenciales
+studentSchema.statics.findByCredentials = async function(email, password) {
+  const student = await this.findOne({ email, isActive: true }).select('+password');
+  if (!student) {
+    throw new Error('Credenciales inválidas');
+  }
+  
+  const isMatch = await student.comparePassword(password);
+  if (!isMatch) {
+    throw new Error('Credenciales inválidas');
+  }
+  
+  return student;
+};
+
 // Índices
+studentSchema.index({ email: 1 });
+studentSchema.index({ studentCode: 1 });
 studentSchema.index({ dni: 1 });
 studentSchema.index({ parent: 1 });
 studentSchema.index({ 'guardians.user': 1 });
+studentSchema.index({ 'guardians.parent': 1 });
 studentSchema.index({ gradeLevel: 1, section: 1 });
 studentSchema.index({ status: 1, isActive: 1 });
+studentSchema.index({ firstName: 'text', lastName: 'text', dni: 'text' });
 
 const Student = mongoose.model('Student', studentSchema);
 

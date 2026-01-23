@@ -1,6 +1,6 @@
 // Middleware de Autenticación - San Martín Digital
 const jwt = require('jsonwebtoken');
-const { User, Teacher, Parent } = require('../models');
+const { User, Teacher, Parent, Student } = require('../models');
 
 // Verificar token JWT
 const auth = async (req, res, next) => {
@@ -42,6 +42,14 @@ const auth = async (req, res, next) => {
       user = await Parent.findById(decoded.userId);
       if (user) {
         userRole = 'padre';
+      }
+    }
+
+    // Si no está en Parents, buscar en Students
+    if (!user) {
+      user = await Student.findById(decoded.userId);
+      if (user) {
+        userRole = 'estudiante';
       }
     }
     

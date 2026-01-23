@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
-const { User, Teacher, Parent } = require('../models');
+const { User, Teacher, Parent, Student } = require('../models');
 const { auth } = require('../middleware/auth');
 
 // Generar token JWT
@@ -129,6 +129,15 @@ router.post('/login', [
         userCollection = 'parents';
       }
     }
+
+    // 4. Si no está en Parents, buscar en Students
+    if (!user) {
+      user = await Student.findOne({ email }).select('+password');
+      if (user) {
+        userRole = 'estudiante';
+        userCollection = 'students';
+      }
+    }
     
     if (!user) {
       return res.status(401).json({
@@ -179,6 +188,11 @@ router.post('/login', [
       userData.employeeCode = user.employeeCode;
     } else if (userRole === 'padre') {
       userData.children = user.children;
+    } else if (userRole === 'estudiante') {
+      userData.studentCode = user.studentCode;
+      userData.gradeLevel = user.gradeLevel;
+      userData.section = user.section;
+      userData.enrollmentNumber = user.enrollmentNumber;
     }
 
     res.json({
