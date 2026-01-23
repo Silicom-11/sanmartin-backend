@@ -1,6 +1,6 @@
 // Middleware de Autenticación - San Martín Digital
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
+const { User, Teacher, Parent } = require('../models');
 
 // Verificar token JWT
 const auth = async (req, res, next) => {
@@ -19,8 +19,31 @@ const auth = async (req, res, next) => {
     // Verificar token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // Buscar usuario
-    const user = await User.findById(decoded.userId);
+    // Buscar usuario en las diferentes colecciones
+    let user = null;
+    let userRole = null;
+    
+    // Primero buscar en Users (administrativos, etc.)
+    user = await User.findById(decoded.userId);
+    if (user) {
+      userRole = user.role;
+    }
+    
+    // Si no está en Users, buscar en Teachers
+    if (!user) {
+      user = await Teacher.findById(decoded.userId);
+      if (user) {
+        userRole = 'docente';
+      }
+    }
+    
+    // Si no está en Teachers, buscar en Parents
+    if (!user) {
+      user = await Parent.findById(decoded.userId);
+      if (user) {
+        userRole = 'padre';
+      }
+    }
     
     if (!user) {
       return res.status(401).json({
@@ -36,8 +59,9 @@ const auth = async (req, res, next) => {
       });
     }
     
-    // Agregar usuario al request
+    // Agregar usuario al request con el rol correcto
     req.user = user;
+    req.user.role = userRole;
     req.userId = user._id;
     
     next();

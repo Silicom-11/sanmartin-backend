@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
-const { User } = require('../models');
+const { User, Teacher, Parent } = require('../models');
 const { auth } = require('../middleware/auth');
 
 // Generar token JWT
@@ -100,8 +100,35 @@ router.post('/login', [
 
     const { email, password } = req.body;
 
-    // Buscar usuario con contraseña
-    const user = await User.findOne({ email }).select('+password');
+    // Buscar usuario en las diferentes colecciones
+    let user = null;
+    let userRole = null;
+    let userCollection = null;
+
+    // 1. Buscar en Users (administrativos, directores, etc.)
+    user = await User.findOne({ email }).select('+password');
+    if (user) {
+      userRole = user.role;
+      userCollection = 'users';
+    }
+
+    // 2. Si no está en Users, buscar en Teachers
+    if (!user) {
+      user = await Teacher.findOne({ email }).select('+password');
+      if (user) {
+        userRole = 'docente';
+        userCollection = 'teachers';
+      }
+    }
+
+    // 3. Si no está en Teachers, buscar en Parents
+    if (!user) {
+      user = await Parent.findOne({ email }).select('+password');
+      if (user) {
+        userRole = 'padre';
+        userCollection = 'parents';
+      }
+    }
     
     if (!user) {
       return res.status(401).json({
@@ -119,6 +146,14 @@ router.post('/login', [
       });
     }
 
+    // Verificar si está activo
+    if (!user.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: 'Cuenta desactivada. Contacte al administrador.',
+      });
+    }
+
     // Actualizar último login
     user.lastLogin = new Date();
     await user.save();
@@ -126,20 +161,33 @@ router.post('/login', [
     // Generar token
     const token = generateToken(user._id);
 
+    // Preparar datos de respuesta según el tipo de usuario
+    const userData = {
+      id: user._id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      fullName: `${user.firstName} ${user.lastName}`,
+      role: userRole,
+      avatar: user.avatar || user.photo,
+      phone: user.phone,
+    };
+
+    // Agregar datos específicos según el rol
+    if (userRole === 'docente') {
+      userData.specialty = user.specialty;
+      userData.employeeCode = user.employeeCode;
+    } else if (userRole === 'padre') {
+      userData.children = user.children;
+    }
+
     res.json({
       success: true,
       message: 'Inicio de sesión exitoso',
       data: {
-        user: {
-          id: user._id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          fullName: user.fullName,
-          role: user.role,
-          avatar: user.avatar,
-        },
+        user: userData,
         token,
+        collection: userCollection, // Para debug, se puede quitar en producción
       },
     });
   } catch (error) {
