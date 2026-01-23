@@ -305,14 +305,14 @@ router.get('/student', auth, authorize('estudiante'), async (req, res) => {
     const formattedGrades = [];
     recentGrades.forEach(grade => {
       if (grade.evaluations && grade.evaluations.length > 0) {
-        grade.evaluations.forEach(eval => {
-          if (eval.score !== undefined) {
+        grade.evaluations.forEach(evaluation => {
+          if (evaluation.score !== undefined) {
             formattedGrades.push({
-              _id: grade._id.toString() + '_' + (eval._id || Math.random()),
+              _id: grade._id.toString() + '_' + (evaluation._id || Math.random()),
               courseName: grade.course?.name || 'Sin curso',
-              evaluationName: eval.name || 'Evaluación',
-              score: eval.score,
-              date: eval.date,
+              evaluationName: evaluation.name || 'Evaluación',
+              score: evaluation.score,
+              date: evaluation.date,
             });
           }
         });
