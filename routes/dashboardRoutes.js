@@ -1,7 +1,7 @@
 // Rutas del Dashboard - San Martín Digital
 const express = require('express');
 const router = express.Router();
-const { Student, Course, Grade, Attendance, Justification, User, Notification } = require('../models');
+const { Student, Course, Grade, Attendance, Justification, User, Parent, Notification } = require('../models');
 const { auth, authorize } = require('../middleware/auth');
 
 // GET /api/dashboard/parent - Dashboard para padres
@@ -9,9 +9,27 @@ router.get('/parent', auth, authorize('padre'), async (req, res) => {
   try {
     const userId = req.userId;
     
-    // Obtener estudiantes del padre
-    const students = await Student.find({ parent: userId })
-      .populate('courses', 'name code');
+    // Determinar si es Parent (nueva colección) o User antiguo
+    let students = [];
+    
+    // Intentar buscar en colección Parent primero
+    const parent = await Parent.findById(userId)
+      .populate({
+        path: 'children.student',
+        select: 'firstName lastName fullName gradeLevel section photo courses',
+        populate: { path: 'courses', select: 'name code' }
+      });
+    
+    if (parent && parent.children && parent.children.length > 0) {
+      // Parent nuevo con array children
+      students = parent.children
+        .filter(c => c.student) // Filtrar nulls
+        .map(c => c.student);
+    } else {
+      // User antiguo con campo parent en Student
+      students = await Student.find({ parent: userId })
+        .populate('courses', 'name code');
+    }
 
     // Estadísticas por estudiante
     const studentsData = await Promise.all(students.map(async (student) => {
