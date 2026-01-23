@@ -2,13 +2,42 @@
 const express = require('express');
 const router = express.Router();
 const { auth, authorize } = require('../middleware/auth');
-const { User, Student, Enrollment, CourseSection, Grade, Attendance, AcademicYear } = require('../models');
+const { User, Parent, Student, Enrollment, CourseSection, Grade, Attendance, AcademicYear } = require('../models');
 
 // GET /api/parent/children - Obtener hijos del padre logueado
 router.get('/children', auth, authorize('padre'), async (req, res) => {
   try {
-    // Obtener los hijos del padre con sus datos actuales
-    const children = await req.user.getChildren();
+    // Determinar si es User antiguo o Parent nuevo
+    let children = [];
+    
+    // Si es un Parent (nueva colección)
+    if (req.user.children && Array.isArray(req.user.children)) {
+      // Obtener los IDs de los estudiantes y hacer populate
+      const parent = await Parent.findById(req.user._id)
+        .populate({
+          path: 'children.student',
+          select: 'firstName lastName dni gender photo birthDate gradeLevel section',
+        });
+      
+      if (parent && parent.children) {
+        children = parent.children
+          .filter(c => c.student) // Filtrar null values
+          .map(c => c.student);
+      }
+    } 
+    // Si es un User antiguo con método getChildren
+    else if (req.user.getChildren) {
+      children = await req.user.getChildren();
+    }
+    
+    if (children.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        count: 0,
+        message: 'No hay hijos registrados',
+      });
+    }
     
     // Para cada hijo, obtener su matrícula actual y datos académicos básicos
     const childrenWithDetails = await Promise.all(
@@ -81,10 +110,15 @@ router.get('/children', auth, authorize('padre'), async (req, res) => {
 // GET /api/parent/children/:childId - Obtener datos completos de un hijo
 router.get('/children/:childId', auth, authorize('padre'), async (req, res) => {
   try {
-    // Verificar que el hijo pertenece al padre
-    const isParentOf = req.user.children.some(
-      c => c.student.toString() === req.params.childId
-    );
+    // Verificar que el hijo pertenece al padre (compatible con User y Parent)
+    let isParentOf = false;
+    
+    if (req.user.children && Array.isArray(req.user.children)) {
+      isParentOf = req.user.children.some(c => {
+        const studentId = c.student?._id || c.student;
+        return studentId.toString() === req.params.childId;
+      });
+    }
     
     if (!isParentOf) {
       return res.status(403).json({
@@ -93,14 +127,45 @@ router.get('/children/:childId', auth, authorize('padre'), async (req, res) => {
       });
     }
     
-    const childData = await req.user.getChildWithAcademics(req.params.childId);
+    // Buscar el estudiante
+    const student = await Student.findById(req.params.childId);
     
-    if (!childData) {
+    if (!student) {
       return res.status(404).json({
         success: false,
         message: 'Estudiante no encontrado',
       });
     }
+    
+    // Obtener datos académicos
+    const enrollment = await Enrollment.getCurrentEnrollment(student._id);
+    let classroomInfo = null;
+    
+    if (enrollment) {
+      await enrollment.populate({
+        path: 'classroom',
+        select: 'section shift',
+        populate: { path: 'gradeLevel', select: 'name shortName type' },
+      });
+      
+      classroomInfo = {
+        grade: enrollment.classroom?.gradeLevel?.name,
+        section: enrollment.classroom?.section,
+        shift: enrollment.classroom?.shift,
+      };
+    }
+    
+    const childData = {
+      _id: student._id,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      dni: student.dni,
+      gender: student.gender,
+      photo: student.photo,
+      birthDate: student.birthDate,
+      address: student.address,
+      classroom: classroomInfo,
+    };
     
     res.json({
       success: true,
@@ -118,10 +183,15 @@ router.get('/children/:childId', auth, authorize('padre'), async (req, res) => {
 // GET /api/parent/children/:childId/courses - Obtener cursos de un hijo
 router.get('/children/:childId/courses', auth, authorize('padre'), async (req, res) => {
   try {
-    // Verificar permiso
-    const isParentOf = req.user.children.some(
-      c => c.student.toString() === req.params.childId
-    );
+    // Verificar permiso (compatible con User y Parent)
+    let isParentOf = false;
+    
+    if (req.user.children && Array.isArray(req.user.children)) {
+      isParentOf = req.user.children.some(c => {
+        const studentId = c.student?._id || c.student;
+        return studentId.toString() === req.params.childId;
+      });
+    }
     
     if (!isParentOf) {
       return res.status(403).json({
@@ -168,10 +238,15 @@ router.get('/children/:childId/grades', auth, authorize('padre'), async (req, re
   try {
     const { period, courseSection } = req.query;
     
-    // Verificar permiso
-    const isParentOf = req.user.children.some(
-      c => c.student.toString() === req.params.childId
-    );
+    // Verificar permiso (compatible con User y Parent)
+    let isParentOf = false;
+    
+    if (req.user.children && Array.isArray(req.user.children)) {
+      isParentOf = req.user.children.some(c => {
+        const studentId = c.student?._id || c.student;
+        return studentId.toString() === req.params.childId;
+      });
+    }
     
     if (!isParentOf) {
       return res.status(403).json({
@@ -248,10 +323,15 @@ router.get('/children/:childId/attendance', auth, authorize('padre'), async (req
   try {
     const { month, year, courseSection } = req.query;
     
-    // Verificar permiso
-    const isParentOf = req.user.children.some(
-      c => c.student.toString() === req.params.childId
-    );
+    // Verificar permiso (compatible con User y Parent)
+    let isParentOf = false;
+    
+    if (req.user.children && Array.isArray(req.user.children)) {
+      isParentOf = req.user.children.some(c => {
+        const studentId = c.student?._id || c.student;
+        return studentId.toString() === req.params.childId;
+      });
+    }
     
     if (!isParentOf) {
       return res.status(403).json({
@@ -315,10 +395,15 @@ router.get('/children/:childId/attendance', auth, authorize('padre'), async (req
 // GET /api/parent/children/:childId/schedule - Obtener horario de un hijo
 router.get('/children/:childId/schedule', auth, authorize('padre'), async (req, res) => {
   try {
-    // Verificar permiso
-    const isParentOf = req.user.children.some(
-      c => c.student.toString() === req.params.childId
-    );
+    // Verificar permiso (compatible con User y Parent)
+    let isParentOf = false;
+    
+    if (req.user.children && Array.isArray(req.user.children)) {
+      isParentOf = req.user.children.some(c => {
+        const studentId = c.student?._id || c.student;
+        return studentId.toString() === req.params.childId;
+      });
+    }
     
     if (!isParentOf) {
       return res.status(403).json({
