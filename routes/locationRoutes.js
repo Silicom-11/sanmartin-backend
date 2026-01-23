@@ -232,6 +232,7 @@ router.get('/students', auth, async (req, res) => {
     const threshold = new Date(Date.now() - parseInt(minutes) * 60 * 1000);
 
     // Obtener últimas ubicaciones de estudiantes
+    // ACTUALIZADO: Ahora busca en la colección students directamente
     const studentLocations = await Location.aggregate([
       {
         $match: {
@@ -252,32 +253,16 @@ router.get('/students', auth, async (req, res) => {
       },
       {
         $lookup: {
-          from: 'users',
+          from: 'students',
           localField: 'user',
           foreignField: '_id',
-          as: 'userInfo',
-        },
-      },
-      {
-        $unwind: '$userInfo',
-      },
-      {
-        $match: {
-          'userInfo.role': 'estudiante',
-        },
-      },
-      {
-        $lookup: {
-          from: 'students',
-          localField: 'userInfo._id',
-          foreignField: 'user',
           as: 'studentInfo',
         },
       },
       {
         $unwind: {
           path: '$studentInfo',
-          preserveNullAndEmptyArrays: true,
+          preserveNullAndEmptyArrays: false, // Solo estudiantes
         },
       },
     ]);
@@ -287,17 +272,17 @@ router.get('/students', auth, async (req, res) => {
       count: studentLocations.length,
       data: studentLocations.map(loc => ({
         user: {
-          _id: loc.userInfo._id,
-          firstName: loc.userInfo.firstName,
-          lastName: loc.userInfo.lastName,
-          email: loc.userInfo.email,
-          profilePhoto: loc.userInfo.profilePhoto,
+          _id: loc.studentInfo._id,
+          firstName: loc.studentInfo.firstName,
+          lastName: loc.studentInfo.lastName,
+          email: loc.studentInfo.email,
+          profilePhoto: loc.studentInfo.photo,
         },
-        student: loc.studentInfo ? {
+        student: {
           gradeLevel: loc.studentInfo.gradeLevel,
           section: loc.studentInfo.section,
           studentCode: loc.studentInfo.studentCode,
-        } : null,
+        },
         location: {
           latitude: loc.coordinates.latitude,
           longitude: loc.coordinates.longitude,
