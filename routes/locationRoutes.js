@@ -470,17 +470,41 @@ router.get('/children', auth, async (req, res) => {
       });
     }
 
+    const parentId = req.user._id || req.user.id;
+    console.log('🔍 Buscando hijos para padre:', parentId, 'Email:', req.user.email);
+
     // Buscar estudiantes vinculados a este padre
     const students = await Student.find({
       $or: [
-        { parent: req.user.id },
-        { 'guardians.parent': req.user.id },
-        { 'guardians.user': req.user.id }
+        { parent: parentId },
+        { 'guardians.parent': parentId },
+        { 'guardians.user': parentId }
       ],
       isActive: true
     }).select('_id firstName lastName photo gradeLevel section studentCode');
 
+    console.log('📋 Estudiantes encontrados:', students.length, students.map(s => `${s.firstName} ${s.lastName}`));
+
     if (!students.length) {
+      // Buscar también si el padre tiene children en el modelo Parent
+      const Parent = require('../models/Parent');
+      const parentRecord = await Parent.findById(parentId);
+      
+      if (parentRecord && parentRecord.children && parentRecord.children.length > 0) {
+        console.log('📋 Buscando desde Parent.children:', parentRecord.children.length);
+        const childIds = parentRecord.children.map(c => c.student);
+        const childStudents = await Student.find({
+          _id: { $in: childIds },
+          isActive: true
+        }).select('_id firstName lastName photo gradeLevel section studentCode');
+        
+        if (childStudents.length > 0) {
+          console.log('✅ Encontrados desde Parent:', childStudents.length);
+          // Continuar con estos estudiantes
+          return processStudents(childStudents, res);
+        }
+      }
+
       return res.json({
         success: true,
         message: 'No tienes hijos vinculados',
@@ -488,6 +512,20 @@ router.get('/children', auth, async (req, res) => {
       });
     }
 
+    return processStudents(students, res);
+  } catch (error) {
+    console.error('Error obteniendo ubicación de hijos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener ubicaciones',
+      error: error.message,
+    });
+  }
+});
+
+// Función helper para procesar estudiantes y sus ubicaciones
+async function processStudents(students, res) {
+  try {
     const studentIds = students.map(s => s._id);
 
     // Obtener última ubicación de cada hijo
