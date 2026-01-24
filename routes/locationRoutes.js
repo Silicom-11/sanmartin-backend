@@ -4,6 +4,9 @@ const express = require('express');
 const router = express.Router();
 const Location = require('../models/Location');
 const User = require('../models/User');
+const Student = require('../models/Student');
+const Parent = require('../models/Parent');
+const Notification = require('../models/Notification');
 const { auth } = require('../middleware/auth');
 
 // ============================================
@@ -449,6 +452,343 @@ router.get('/stats', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al obtener estadísticas',
+    });
+  }
+});
+
+// ============================================
+// GET /api/location/children - Ubicaciones de hijos para padres
+// ============================================
+router.get('/children', auth, async (req, res) => {
+  try {
+    // Solo padres pueden acceder a este endpoint
+    if (req.user.role !== 'padre') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo los padres pueden ver la ubicación de sus hijos',
+      });
+    }
+
+    // Buscar estudiantes vinculados a este padre
+    const students = await Student.find({
+      $or: [
+        { parent: req.user.id },
+        { 'guardians.parent': req.user.id },
+        { 'guardians.user': req.user.id }
+      ],
+      isActive: true
+    }).select('_id firstName lastName photo gradeLevel section studentCode');
+
+    if (!students.length) {
+      return res.json({
+        success: true,
+        message: 'No tienes hijos vinculados',
+        data: [],
+      });
+    }
+
+    const studentIds = students.map(s => s._id);
+
+    // Obtener última ubicación de cada hijo
+    const locations = await Location.aggregate([
+      {
+        $match: {
+          user: { $in: studentIds }
+        }
+      },
+      {
+        $sort: { createdAt: -1 }
+      },
+      {
+        $group: {
+          _id: '$user',
+          lastLocation: { $first: '$$ROOT' }
+        }
+      },
+      {
+        $replaceRoot: { newRoot: '$lastLocation' }
+      }
+    ]);
+
+    // Combinar info de estudiantes con ubicaciones
+    const childrenWithLocation = students.map(student => {
+      const location = locations.find(l => l.user.toString() === student._id.toString());
+      const now = new Date();
+      
+      let isOnline = false;
+      let lastSeenText = 'Sin ubicación registrada';
+      let minutesAgo = null;
+      
+      if (location) {
+        const lastUpdate = new Date(location.createdAt);
+        const diffMs = now - lastUpdate;
+        minutesAgo = Math.floor(diffMs / 60000);
+        
+        // Consideramos online si la última ubicación fue hace menos de 5 minutos
+        isOnline = minutesAgo < 5 && location.sessionStatus === 'online';
+        
+        if (minutesAgo < 1) {
+          lastSeenText = 'Justo ahora';
+        } else if (minutesAgo < 60) {
+          lastSeenText = `Hace ${minutesAgo} minuto${minutesAgo > 1 ? 's' : ''}`;
+        } else if (minutesAgo < 1440) {
+          const hours = Math.floor(minutesAgo / 60);
+          lastSeenText = `Hace ${hours} hora${hours > 1 ? 's' : ''}`;
+        } else {
+          const days = Math.floor(minutesAgo / 1440);
+          lastSeenText = `Hace ${days} día${days > 1 ? 's' : ''}`;
+        }
+      }
+      
+      return {
+        student: {
+          _id: student._id,
+          firstName: student.firstName,
+          lastName: student.lastName,
+          fullName: `${student.firstName} ${student.lastName}`,
+          photo: student.photo,
+          gradeLevel: student.gradeLevel,
+          section: student.section,
+          studentCode: student.studentCode,
+        },
+        location: location ? {
+          latitude: location.coordinates.latitude,
+          longitude: location.coordinates.longitude,
+          accuracy: location.coordinates.accuracy,
+          address: location.address?.formattedAddress || null,
+        } : null,
+        isOnline,
+        sessionStatus: location?.sessionStatus || 'offline',
+        lastUpdate: location?.createdAt || null,
+        lastSeenText,
+        minutesAgo,
+        batteryLevel: location?.batteryLevel || null,
+        networkType: location?.networkType || null,
+      };
+    });
+
+    res.json({
+      success: true,
+      count: childrenWithLocation.length,
+      data: childrenWithLocation,
+    });
+  } catch (error) {
+    console.error('Error obteniendo ubicación de hijos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener ubicaciones',
+      error: error.message,
+    });
+  }
+});
+
+// ============================================
+// GET /api/location/child/:studentId - Ubicación detallada de un hijo
+// ============================================
+router.get('/child/:studentId', auth, async (req, res) => {
+  try {
+    // Solo padres pueden acceder
+    if (req.user.role !== 'padre') {
+      return res.status(403).json({
+        success: false,
+        message: 'No autorizado',
+      });
+    }
+
+    const { studentId } = req.params;
+    const { hours = 24 } = req.query;
+
+    // Verificar que el estudiante está vinculado a este padre
+    const student = await Student.findOne({
+      _id: studentId,
+      $or: [
+        { parent: req.user.id },
+        { 'guardians.parent': req.user.id },
+        { 'guardians.user': req.user.id }
+      ],
+      isActive: true
+    });
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Estudiante no encontrado o no está vinculado a tu cuenta',
+      });
+    }
+
+    // Obtener última ubicación
+    const lastLocation = await Location.findOne({ user: studentId })
+      .sort({ createdAt: -1 });
+
+    // Obtener historial de las últimas X horas
+    const since = new Date(Date.now() - parseInt(hours) * 60 * 60 * 1000);
+    const history = await Location.find({
+      user: studentId,
+      createdAt: { $gte: since }
+    })
+      .sort({ createdAt: -1 })
+      .select('coordinates sessionStatus updateType createdAt batteryLevel networkType address')
+      .limit(100);
+
+    // Calcular estadísticas del día
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const todayStats = await Location.aggregate([
+      {
+        $match: {
+          user: student._id,
+          createdAt: { $gte: startOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalUpdates: { $sum: 1 },
+          avgBattery: { $avg: '$batteryLevel' },
+          onlineCount: {
+            $sum: { $cond: [{ $eq: ['$sessionStatus', 'online'] }, 1, 0] }
+          },
+          offlineCount: {
+            $sum: { $cond: [{ $eq: ['$sessionStatus', 'offline'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        student: {
+          _id: student._id,
+          firstName: student.firstName,
+          lastName: student.lastName,
+          fullName: `${student.firstName} ${student.lastName}`,
+          photo: student.photo,
+          gradeLevel: student.gradeLevel,
+          section: student.section,
+        },
+        lastLocation: lastLocation ? {
+          latitude: lastLocation.coordinates.latitude,
+          longitude: lastLocation.coordinates.longitude,
+          accuracy: lastLocation.coordinates.accuracy,
+          address: lastLocation.address?.formattedAddress,
+          sessionStatus: lastLocation.sessionStatus,
+          batteryLevel: lastLocation.batteryLevel,
+          networkType: lastLocation.networkType,
+          timestamp: lastLocation.createdAt,
+        } : null,
+        history: history.map(h => ({
+          latitude: h.coordinates.latitude,
+          longitude: h.coordinates.longitude,
+          sessionStatus: h.sessionStatus,
+          updateType: h.updateType,
+          timestamp: h.createdAt,
+          batteryLevel: h.batteryLevel,
+        })),
+        todayStats: todayStats[0] || {
+          totalUpdates: 0,
+          avgBattery: null,
+          onlineCount: 0,
+          offlineCount: 0
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error obteniendo ubicación del hijo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener ubicación',
+    });
+  }
+});
+
+// ============================================
+// POST /api/location/disconnect - Notificar desconexión a padres
+// Este endpoint se llama cuando el estudiante se desconecta
+// ============================================
+router.post('/disconnect', auth, async (req, res) => {
+  try {
+    // Solo estudiantes pueden notificar su desconexión
+    if (req.user.role !== 'estudiante') {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo estudiantes pueden usar este endpoint',
+      });
+    }
+
+    const { latitude, longitude, reason = 'app_closed' } = req.body;
+
+    // Guardar última ubicación con estado offline
+    if (latitude && longitude) {
+      await Location.create({
+        user: req.user.id,
+        coordinates: { latitude, longitude },
+        updateType: 'logout',
+        sessionStatus: 'offline',
+        clientTimestamp: new Date(),
+      });
+    }
+
+    // Buscar al estudiante para obtener su nombre
+    const student = await Student.findById(req.user.id)
+      .select('firstName lastName parent guardians');
+
+    if (!student) {
+      return res.json({ success: true, message: 'Desconexión registrada' });
+    }
+
+    // Obtener todos los padres/tutores vinculados
+    const parentIds = [];
+    if (student.parent) {
+      parentIds.push(student.parent);
+    }
+    if (student.guardians && student.guardians.length > 0) {
+      student.guardians.forEach(g => {
+        if (g.parent) parentIds.push(g.parent);
+        if (g.user) parentIds.push(g.user);
+      });
+    }
+
+    // Crear notificaciones para cada padre
+    const notifications = [];
+    for (const parentId of parentIds) {
+      notifications.push({
+        user: parentId,
+        title: '📍 Desconexión detectada',
+        message: `${student.firstName} ${student.lastName} se ha desconectado`,
+        type: 'location_alert',
+        priority: 'high',
+        data: {
+          studentId: student._id,
+          studentName: `${student.firstName} ${student.lastName}`,
+          reason,
+          lastLatitude: latitude,
+          lastLongitude: longitude,
+          timestamp: new Date(),
+          action: 'open_child_location',
+        },
+        read: false,
+      });
+    }
+
+    if (notifications.length > 0) {
+      await Notification.insertMany(notifications);
+    }
+
+    // TODO: Enviar push notification con Firebase
+    // Esto se implementará cuando tengamos FCM configurado
+
+    res.json({
+      success: true,
+      message: 'Desconexión registrada y padres notificados',
+      notifiedParents: parentIds.length,
+    });
+  } catch (error) {
+    console.error('Error en desconexión:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al procesar desconexión',
     });
   }
 });
