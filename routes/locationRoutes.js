@@ -8,6 +8,7 @@ const Student = require('../models/Student');
 const Parent = require('../models/Parent');
 const Notification = require('../models/Notification');
 const { auth } = require('../middleware/auth');
+const pushService = require('../services/pushNotifications');
 
 // ============================================
 // POST /api/location - Guardar ubicación actual
@@ -776,8 +777,41 @@ router.post('/disconnect', auth, async (req, res) => {
       await Notification.insertMany(notifications);
     }
 
-    // TODO: Enviar push notification con Firebase
-    // Esto se implementará cuando tengamos FCM configurado
+    // Enviar notificaciones push a los padres
+    try {
+      // Obtener tokens FCM de los padres
+      const parentTokens = [];
+      
+      for (const parentId of parentIds) {
+        // Buscar en Parent
+        let parent = await Parent.findById(parentId);
+        if (parent && parent.pushTokens) {
+          parent.pushTokens
+            .filter(t => t.isActive)
+            .forEach(t => parentTokens.push(t.token));
+        }
+        
+        // Buscar en User (por si es padre en colección users)
+        const user = await User.findById(parentId);
+        if (user && user.pushTokens) {
+          user.pushTokens
+            .filter(t => t.isActive)
+            .forEach(t => parentTokens.push(t.token));
+        }
+      }
+
+      if (parentTokens.length > 0) {
+        await pushService.notifyParentOfDisconnection(
+          parentTokens,
+          `${student.firstName} ${student.lastName}`,
+          { latitude, longitude }
+        );
+        console.log(`📱 Notificación push enviada a ${parentTokens.length} dispositivo(s)`);
+      }
+    } catch (pushError) {
+      console.error('Error enviando push notification:', pushError);
+      // No fallar la petición si falla el push
+    }
 
     res.json({
       success: true,

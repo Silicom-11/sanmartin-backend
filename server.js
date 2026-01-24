@@ -9,6 +9,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 
+// Inicializar Firebase para notificaciones push
+const pushNotifications = require('./services/pushNotifications');
+pushNotifications.initializeFirebase();
+
 // Importar rutas
 const authRoutes = require('./routes/authRoutes');
 const studentRoutes = require('./routes/studentRoutes');

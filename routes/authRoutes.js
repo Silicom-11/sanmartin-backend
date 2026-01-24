@@ -431,4 +431,142 @@ router.post('/change-password', auth, [
   }
 });
 
+// ============================================
+// POST /api/auth/push-token - Registrar token FCM para notificaciones push
+// ============================================
+router.post('/push-token', auth, [
+  body('token').notEmpty().withMessage('Token requerido'),
+  body('platform').isIn(['android', 'ios', 'web']).withMessage('Plataforma inválida'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        errors: errors.array(),
+      });
+    }
+
+    const { token, platform, device } = req.body;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // Determinar el modelo según el rol
+    let Model;
+    if (userRole === 'estudiante') {
+      Model = Student;
+    } else if (userRole === 'padre') {
+      // Buscar primero en Parent, luego en User
+      let user = await Parent.findById(userId);
+      if (!user) {
+        user = await User.findById(userId);
+      }
+      Model = user?.constructor;
+      if (!Model) {
+        return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+      }
+    } else {
+      Model = User;
+    }
+
+    // Buscar usuario
+    const user = await Model.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    // Inicializar pushTokens si no existe
+    if (!user.pushTokens) {
+      user.pushTokens = [];
+    }
+
+    // Buscar si el token ya existe
+    const existingTokenIndex = user.pushTokens.findIndex(t => t.token === token);
+    
+    if (existingTokenIndex >= 0) {
+      // Actualizar token existente
+      user.pushTokens[existingTokenIndex].lastUsed = new Date();
+      user.pushTokens[existingTokenIndex].isActive = true;
+      user.pushTokens[existingTokenIndex].device = device || user.pushTokens[existingTokenIndex].device;
+    } else {
+      // Agregar nuevo token
+      user.pushTokens.push({
+        token,
+        platform,
+        device: device || 'Unknown',
+        lastUsed: new Date(),
+        isActive: true,
+      });
+    }
+
+    // Limitar a máximo 5 tokens por usuario (últimos 5)
+    if (user.pushTokens.length > 5) {
+      user.pushTokens = user.pushTokens
+        .sort((a, b) => new Date(b.lastUsed) - new Date(a.lastUsed))
+        .slice(0, 5);
+    }
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Token FCM registrado exitosamente',
+      tokensCount: user.pushTokens.length,
+    });
+  } catch (error) {
+    console.error('Push token register error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al registrar token FCM',
+    });
+  }
+});
+
+// ============================================
+// DELETE /api/auth/push-token - Eliminar token FCM (logout)
+// ============================================
+router.delete('/push-token', auth, async (req, res) => {
+  try {
+    const { token } = req.body;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token requerido',
+      });
+    }
+
+    // Determinar el modelo según el rol
+    let user;
+    if (userRole === 'estudiante') {
+      user = await Student.findById(userId);
+    } else if (userRole === 'padre') {
+      user = await Parent.findById(userId) || await User.findById(userId);
+    } else {
+      user = await User.findById(userId);
+    }
+
+    if (!user || !user.pushTokens) {
+      return res.json({ success: true, message: 'Token no encontrado' });
+    }
+
+    // Marcar como inactivo o eliminar
+    user.pushTokens = user.pushTokens.filter(t => t.token !== token);
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Token FCM eliminado',
+    });
+  } catch (error) {
+    console.error('Push token delete error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al eliminar token FCM',
+    });
+  }
+});
+
 module.exports = router;

@@ -199,6 +199,20 @@ const studentSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  
+  // ==========================================
+  // PUSH TOKENS PARA NOTIFICACIONES
+  // ==========================================
+  pushTokens: [{
+    token: String,
+    device: String,
+    platform: {
+      type: String,
+      enum: ['android', 'ios', 'web'],
+    },
+    lastUsed: { type: Date, default: Date.now },
+    isActive: { type: Boolean, default: true },
+  }],
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
