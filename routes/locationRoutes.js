@@ -619,7 +619,7 @@ async function processStudents(students, res) {
       error: error.message,
     });
   }
-});
+}
 
 // ============================================
 // GET /api/location/child/:studentId - Ubicación detallada de un hijo
