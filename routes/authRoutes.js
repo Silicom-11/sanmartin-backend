@@ -278,30 +278,72 @@ router.post('/google', async (req, res) => {
   }
 });
 
+// Helper: buscar usuario en todas las colecciones
+const findUserInAllCollections = async (userId) => {
+  let user = await User.findById(userId);
+  if (user) return { user, role: user.role, collection: 'users' };
+
+  user = await Teacher.findById(userId);
+  if (user) return { user, role: 'docente', collection: 'teachers' };
+
+  user = await Parent.findById(userId);
+  if (user) return { user, role: 'padre', collection: 'parents' };
+
+  user = await Student.findById(userId);
+  if (user) return { user, role: 'estudiante', collection: 'students' };
+
+  return null;
+};
+
 // GET /api/auth/me - Obtener usuario actual
 router.get('/me', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.userId)
-      .populate('students', 'firstName lastName gradeLevel section');
+    const result = await findUserInAllCollections(req.userId);
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    const { user, role, collection } = result;
+
+    const userData = {
+      id: user._id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      fullName: user.fullName || `${user.firstName} ${user.lastName}`,
+      role,
+      phone: user.phone,
+      avatar: user.avatar || user.photo,
+      dni: user.dni,
+      notificationsEnabled: user.notificationsEnabled,
+      emailNotifications: user.emailNotifications,
+    };
+
+    // Datos específicos por rol
+    if (role === 'docente') {
+      userData.specialty = user.specialty;
+      userData.employeeCode = user.employeeCode;
+    } else if (role === 'padre') {
+      if (collection === 'parents') {
+        await user.populate('children.student', 'firstName lastName gradeLevel section');
+        userData.children = user.children;
+      } else {
+        await user.populate('students', 'firstName lastName gradeLevel section');
+        userData.students = user.students;
+      }
+    } else if (role === 'estudiante') {
+      userData.studentCode = user.studentCode;
+      userData.gradeLevel = user.gradeLevel;
+      userData.section = user.section;
+      userData.enrollmentNumber = user.enrollmentNumber;
+    } else if (collection === 'users' && user.students) {
+      await user.populate('students', 'firstName lastName gradeLevel section');
+      userData.students = user.students;
+    }
 
     res.json({
       success: true,
-      data: {
-        user: {
-          id: user._id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          fullName: user.fullName,
-          role: user.role,
-          phone: user.phone,
-          avatar: user.avatar,
-          dni: user.dni,
-          students: user.students,
-          notificationsEnabled: user.notificationsEnabled,
-          emailNotifications: user.emailNotifications,
-        },
-      },
+      data: { user: userData },
     });
   } catch (error) {
     console.error('Get me error:', error);
@@ -324,11 +366,15 @@ router.put('/profile', auth, async (req, res) => {
       }
     });
 
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      updates,
-      { new: true, runValidators: true }
-    );
+    // Buscar en todas las colecciones
+    let user = await User.findByIdAndUpdate(req.userId, updates, { new: true, runValidators: true });
+    if (!user) user = await Teacher.findByIdAndUpdate(req.userId, updates, { new: true, runValidators: true });
+    if (!user) user = await Parent.findByIdAndUpdate(req.userId, updates, { new: true, runValidators: true });
+    if (!user) user = await Student.findByIdAndUpdate(req.userId, updates, { new: true, runValidators: true });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
 
     res.json({
       success: true,
@@ -351,7 +397,11 @@ router.post('/forgot-password', [
   try {
     const { email } = req.body;
 
-    const user = await User.findOne({ email });
+    // Buscar en todas las colecciones
+    let user = await User.findOne({ email });
+    if (!user) user = await Teacher.findOne({ email });
+    if (!user) user = await Parent.findOne({ email });
+    if (!user) user = await Student.findOne({ email });
     if (!user) {
       // No revelar si el email existe
       return res.json({
@@ -360,9 +410,13 @@ router.post('/forgot-password', [
       });
     }
 
-    // Generar token de reset
-    const resetToken = user.createPasswordResetToken();
-    await user.save({ validateBeforeSave: false });
+    // Generar token de reset (si el modelo lo soporta)
+    if (typeof user.createPasswordResetToken === 'function') {
+      const resetToken = user.createPasswordResetToken();
+      await user.save({ validateBeforeSave: false });
+    } else {
+      // Para colecciones sin reset token, simplemente confirmamos
+    }
 
     // TODO: Enviar email con el token
     // En producción, enviar email real
@@ -398,7 +452,15 @@ router.post('/change-password', auth, [
 
     const { currentPassword, newPassword } = req.body;
 
-    const user = await User.findById(req.userId).select('+password');
+    // Buscar en todas las colecciones
+    let user = await User.findById(req.userId).select('+password');
+    if (!user) user = await Teacher.findById(req.userId).select('+password');
+    if (!user) user = await Parent.findById(req.userId).select('+password');
+    if (!user) user = await Student.findById(req.userId).select('+password');
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
     
     if (!user.password) {
       return res.status(400).json({

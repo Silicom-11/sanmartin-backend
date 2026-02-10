@@ -1,7 +1,7 @@
 // Rutas del Dashboard - San Martín Digital
 const express = require('express');
 const router = express.Router();
-const { Student, Course, Grade, Attendance, Justification, User, Parent, Notification } = require('../models');
+const { Student, Course, Grade, Attendance, Justification, User, Parent, Teacher, Notification } = require('../models');
 const { auth, authorize } = require('../middleware/auth');
 
 // GET /api/dashboard/parent - Dashboard para padres
@@ -196,18 +196,25 @@ router.get('/admin', auth, authorize('administrativo'), async (req, res) => {
     const [
       totalStudents,
       activeStudents,
-      totalTeachers,
-      totalParents,
+      teachersInUsers,
+      teachersInTeachers,
+      parentsInUsers,
+      parentsInParents,
       totalCourses,
       pendingJustifications,
     ] = await Promise.all([
       Student.countDocuments(),
       Student.countDocuments({ isActive: true }),
       User.countDocuments({ role: 'docente', isActive: true }),
+      Teacher.countDocuments({ isActive: true }),
       User.countDocuments({ role: 'padre', isActive: true }),
+      Parent.countDocuments({ isActive: true }),
       Course.countDocuments({ isActive: true }),
       Justification.countDocuments({ status: 'pendiente' }),
     ]);
+
+    const totalTeachers = teachersInUsers + teachersInTeachers;
+    const totalParents = parentsInUsers + parentsInParents;
 
     // Estudiantes por grado
     const studentsByGrade = await Student.aggregate([

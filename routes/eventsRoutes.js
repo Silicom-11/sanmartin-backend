@@ -1,7 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const { auth, authorize } = require('../middleware/auth')
-const { Event, Notification, User } = require('../models')
+const { Event, Notification, User, Teacher, Parent, Student } = require('../models')
 
 // GET /api/events - Obtener todos los eventos
 router.get('/', auth, async (req, res) => {
@@ -34,8 +34,30 @@ router.get('/', auth, async (req, res) => {
   }
 })
 
+// GET /api/events/upcoming - Próximos eventos (para mobile app)
+router.get('/upcoming', auth, async (req, res) => {
+  try {
+    const { limit = 10 } = req.query
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    
+    const events = await Event.find({
+      isActive: true,
+      date: { $gte: today.toISOString().split('T')[0] }
+    })
+      .sort({ date: 1 })
+      .limit(parseInt(limit))
+      .populate('createdBy', 'firstName lastName')
+    
+    res.json({ success: true, data: events })
+  } catch (error) {
+    console.error('Error obteniendo próximos eventos:', error)
+    res.status(500).json({ success: false, message: 'Error del servidor' })
+  }
+})
+
 // POST /api/events - Crear nuevo evento
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, authorize('administrativo'), async (req, res) => {
   try {
     const {
       title,
@@ -80,11 +102,27 @@ router.post('/', auth, async (req, res) => {
     if (notifyTeachers) notificationRoles.push('docente')
 
     if (notificationRoles.length > 0) {
-      const users = await User.find({ role: { $in: notificationRoles }, isActive: true })
+      // Buscar recipientes en todas las colecciones
+      const recipientIds = [];
+      const usersInUserCol = await User.find({ role: { $in: notificationRoles }, isActive: true }).select('_id');
+      recipientIds.push(...usersInUserCol.map(u => u._id));
       
-      if (users.length > 0) {
-        const notifications = users.map(user => ({
-          recipient: user._id,
+      if (notificationRoles.includes('docente')) {
+        const teachers = await Teacher.find({ isActive: true }).select('_id');
+        recipientIds.push(...teachers.map(t => t._id));
+      }
+      if (notificationRoles.includes('padre')) {
+        const parents = await Parent.find({ isActive: true }).select('_id');
+        recipientIds.push(...parents.map(p => p._id));
+      }
+      if (notificationRoles.includes('estudiante')) {
+        const students = await Student.find({ isActive: true }).select('_id');
+        recipientIds.push(...students.map(s => s._id));
+      }
+      
+      if (recipientIds.length > 0) {
+        const notifications = recipientIds.map(id => ({
+          recipient: id,
           title: `📅 Nuevo evento: ${title}`,
           message: description || `Evento programado para ${date}${time ? ` a las ${time}` : ''}`,
           type: 'event',
@@ -126,7 +164,7 @@ router.get('/:id', auth, async (req, res) => {
 })
 
 // PUT /api/events/:id - Actualizar evento
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', auth, authorize('administrativo'), async (req, res) => {
   try {
     const event = await Event.findByIdAndUpdate(
       req.params.id,
@@ -153,7 +191,7 @@ router.put('/:id', auth, async (req, res) => {
 })
 
 // DELETE /api/events/:id - Eliminar evento
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, authorize('administrativo'), async (req, res) => {
   try {
     const event = await Event.findByIdAndUpdate(
       req.params.id,
@@ -190,12 +228,23 @@ router.post('/:id/reminder', auth, async (req, res) => {
       })
     }
 
-    // Obtener todos los usuarios activos
-    const users = await User.find({ isActive: true })
+    // Obtener todos los usuarios activos de TODAS las colecciones
+    const [users, teachers, parents, students] = await Promise.all([
+      User.find({ isActive: true }).select('_id'),
+      Teacher.find({ isActive: true }).select('_id'),
+      Parent.find({ isActive: true }).select('_id'),
+      Student.find({ isActive: true }).select('_id'),
+    ]);
+    const allRecipientIds = [
+      ...users.map(u => u._id),
+      ...teachers.map(t => t._id),
+      ...parents.map(p => p._id),
+      ...students.map(s => s._id),
+    ];
     
-    if (users.length > 0) {
-      const notifications = users.map(user => ({
-        recipient: user._id,
+    if (allRecipientIds.length > 0) {
+      const notifications = allRecipientIds.map(id => ({
+        recipient: id,
         title: `⏰ Recordatorio: ${event.title}`,
         message: `${event.description || 'No olvides este evento'}${event.time ? ` - Hora: ${event.time}` : ''}`,
         type: 'reminder',

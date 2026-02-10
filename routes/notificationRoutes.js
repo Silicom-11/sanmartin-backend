@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { Notification, User } = require('../models');
+const { Notification, User, Teacher, Parent, Student } = require('../models');
 const { auth, authorize } = require('../middleware/auth');
 
 // GET /api/notifications - Listar notificaciones del usuario
@@ -174,12 +174,36 @@ router.post('/broadcast', auth, authorize('administrativo', 'docente'), [
     if (recipientIds && recipientIds.length > 0) {
       recipients = recipientIds;
     } else if (roles && roles.length > 0) {
-      const users = await User.find({ role: { $in: roles }, isActive: true });
-      recipients = users.map(u => u._id);
+      // Buscar en todas las colecciones según roles
+      const userRecipients = await User.find({ role: { $in: roles }, isActive: true }).select('_id');
+      recipients = userRecipients.map(u => u._id);
+      
+      if (roles.includes('docente')) {
+        const teacherRecipients = await Teacher.find({ isActive: true }).select('_id');
+        recipients = [...recipients, ...teacherRecipients.map(t => t._id)];
+      }
+      if (roles.includes('padre')) {
+        const parentRecipients = await Parent.find({ isActive: true }).select('_id');
+        recipients = [...recipients, ...parentRecipients.map(p => p._id)];
+      }
+      if (roles.includes('estudiante')) {
+        const studentRecipients = await Student.find({ isActive: true }).select('_id');
+        recipients = [...recipients, ...studentRecipients.map(s => s._id)];
+      }
     } else {
-      // Si no se especifican roles ni recipientIds, enviar a todos los usuarios activos
-      const users = await User.find({ isActive: true });
-      recipients = users.map(u => u._id);
+      // Enviar a TODOS los usuarios activos en todas las colecciones
+      const [users, teachers, parents, students] = await Promise.all([
+        User.find({ isActive: true }).select('_id'),
+        Teacher.find({ isActive: true }).select('_id'),
+        Parent.find({ isActive: true }).select('_id'),
+        Student.find({ isActive: true }).select('_id'),
+      ]);
+      recipients = [
+        ...users.map(u => u._id),
+        ...teachers.map(t => t._id),
+        ...parents.map(p => p._id),
+        ...students.map(s => s._id),
+      ];
     }
 
     if (recipients.length === 0) {

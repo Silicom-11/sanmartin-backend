@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { auth } = require('../middleware/auth');
-const { Conversation, Message, User } = require('../models');
+const { Conversation, Message, User, Teacher, Parent } = require('../models');
 
 // GET /api/messages/conversations - Obtener conversaciones del usuario
 router.get('/conversations', auth, async (req, res) => {
@@ -192,26 +192,57 @@ router.post('/send', auth, async (req, res) => {
 // GET /api/messages/contacts - Obtener contactos disponibles para mensajes
 router.get('/contacts', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.userId);
-    
-    // Dependiendo del rol, mostrar diferentes contactos
-    let query = { _id: { $ne: req.userId }, isActive: true };
-    
-    if (user.role === 'padre') {
-      // Padres pueden contactar docentes
-      query.role = { $in: ['docente', 'administrativo'] };
-    } else if (user.role === 'estudiante') {
-      // Estudiantes pueden contactar docentes
-      query.role = 'docente';
-    } else if (user.role === 'docente') {
-      // Docentes pueden contactar padres y administración
-      query.role = { $in: ['padre', 'administrativo'] };
+    // Buscar usuario actual en todas las colecciones
+    let currentUser = await User.findById(req.userId);
+    let currentRole = currentUser?.role;
+    if (!currentUser) {
+      const teacher = await Teacher.findById(req.userId);
+      if (teacher) { currentUser = teacher; currentRole = 'docente'; }
     }
-    // Administradores pueden contactar a todos
-
-    const contacts = await User.find(query)
-      .select('firstName lastName email role avatar')
-      .sort({ firstName: 1, lastName: 1 });
+    if (!currentUser) {
+      const parent = await Parent.findById(req.userId);
+      if (parent) { currentUser = parent; currentRole = 'padre'; }
+    }
+    
+    let contacts = [];
+    
+    if (currentRole === 'padre') {
+      // Padres: docentes + administrativos
+      const usersContacts = await User.find({ _id: { $ne: req.userId }, isActive: true, role: { $in: ['docente', 'administrativo'] } })
+        .select('firstName lastName email role avatar');
+      const teacherContacts = await Teacher.find({ _id: { $ne: req.userId }, isActive: true })
+        .select('firstName lastName email specialty');
+      contacts = [
+        ...usersContacts.map(u => ({ ...u.toObject(), source: 'users' })),
+        ...teacherContacts.map(t => ({ ...t.toObject(), role: 'docente', source: 'teachers' }))
+      ];
+    } else if (currentRole === 'docente') {
+      // Docentes: padres + administrativos
+      const usersContacts = await User.find({ _id: { $ne: req.userId }, isActive: true, role: { $in: ['padre', 'administrativo'] } })
+        .select('firstName lastName email role avatar');
+      const parentContacts = await Parent.find({ _id: { $ne: req.userId }, isActive: true })
+        .select('firstName lastName email phone');
+      contacts = [
+        ...usersContacts.map(u => ({ ...u.toObject(), source: 'users' })),
+        ...parentContacts.map(p => ({ ...p.toObject(), role: 'padre', source: 'parents' }))
+      ];
+    } else {
+      // Administrativos: todos
+      const usersContacts = await User.find({ _id: { $ne: req.userId }, isActive: true })
+        .select('firstName lastName email role avatar');
+      const teacherContacts = await Teacher.find({ _id: { $ne: req.userId }, isActive: true })
+        .select('firstName lastName email specialty');
+      const parentContacts = await Parent.find({ _id: { $ne: req.userId }, isActive: true })
+        .select('firstName lastName email phone');
+      contacts = [
+        ...usersContacts.map(u => ({ ...u.toObject(), source: 'users' })),
+        ...teacherContacts.map(t => ({ ...t.toObject(), role: 'docente', source: 'teachers' })),
+        ...parentContacts.map(p => ({ ...p.toObject(), role: 'padre', source: 'parents' }))
+      ];
+    }
+    
+    // Ordenar por nombre
+    contacts.sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
 
     res.json({
       success: true,
