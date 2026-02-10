@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { Course, User, Student } = require('../models');
+const { Course, User, Student, Teacher } = require('../models');
 const { auth, authorize, isTeacherOrAdmin } = require('../middleware/auth');
 
 // GET /api/courses/stats - Estadísticas de cursos
@@ -66,7 +66,7 @@ router.get('/my-courses', auth, authorize('docente'), async (req, res) => {
 // GET /api/courses - Listar cursos
 router.get('/', auth, async (req, res) => {
   try {
-    let query = { isActive: true };
+    let query = {};
     
     // Si es docente, solo sus cursos
     if (req.user.role === 'docente') {
@@ -83,10 +83,25 @@ router.get('/', auth, async (req, res) => {
     if (req.query.year) {
       query.academicYear = parseInt(req.query.year);
     }
+    // Por defecto mostrar solo activos, pero permitir ver todos
+    if (req.query.showAll !== 'true') {
+      query.isActive = true;
+    }
 
-    const courses = await Course.find(query)
+    let courses = await Course.find(query)
       .populate('teacher', 'firstName lastName email')
-      .sort({ name: 1 });
+      .sort({ gradeLevel: 1, name: 1 });
+
+    // Para cursos sin teacher populated, intentar buscar en Teacher collection
+    for (let i = 0; i < courses.length; i++) {
+      if (courses[i].teacher === null && courses[i]._doc?.teacher) {
+        const teacherDoc = await Teacher.findById(courses[i]._doc.teacher).select('firstName lastName email');
+        if (teacherDoc) {
+          courses[i] = courses[i].toObject();
+          courses[i].teacher = teacherDoc;
+        }
+      }
+    }
 
     res.json({
       success: true,
@@ -134,7 +149,6 @@ router.post('/', auth, authorize('administrativo'), [
   body('name').notEmpty().withMessage('El nombre es requerido'),
   body('code').notEmpty().withMessage('El código es requerido'),
   body('gradeLevel').notEmpty().withMessage('El grado es requerido'),
-  body('teacherId').notEmpty().withMessage('El docente es requerido'),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -156,13 +170,20 @@ router.post('/', auth, authorize('administrativo'), [
       });
     }
 
-    // Verificar que el docente existe
-    const teacher = await User.findOne({ _id: teacherId, role: 'docente' });
-    if (!teacher) {
-      return res.status(400).json({
-        success: false,
-        message: 'Docente no encontrado',
-      });
+    // Verificar que el docente existe (buscar en User Y Teacher)
+    let teacherRef = null;
+    if (teacherId) {
+      let teacher = await User.findOne({ _id: teacherId, role: 'docente' });
+      if (!teacher) {
+        teacher = await Teacher.findById(teacherId);
+      }
+      if (!teacher) {
+        return res.status(400).json({
+          success: false,
+          message: 'Docente no encontrado',
+        });
+      }
+      teacherRef = teacherId;
     }
 
     const course = await Course.create({
@@ -171,15 +192,20 @@ router.post('/', auth, authorize('administrativo'), [
       description,
       gradeLevel,
       section: section || 'A',
-      teacher: teacherId,
+      teacher: teacherRef,
       schedule,
       evaluationWeights,
     });
 
-    // Agregar curso al docente
-    await User.findByIdAndUpdate(teacherId, {
-      $push: { courses: course._id },
-    });
+    // Agregar curso al docente (buscar en ambas colecciones)
+    if (teacherRef) {
+      await User.findByIdAndUpdate(teacherRef, {
+        $push: { courses: course._id },
+      }).catch(() => {});
+      await Teacher.findByIdAndUpdate(teacherRef, {
+        $push: { courses: course._id },
+      }).catch(() => {});
+    }
 
     await course.populate('teacher', 'firstName lastName');
 
@@ -258,7 +284,14 @@ router.get('/:id/students', auth, async (req, res) => {
 // POST /api/courses/:id/students - Agregar estudiantes al curso
 router.post('/:id/students', auth, authorize('administrativo'), async (req, res) => {
   try {
-    const { studentIds } = req.body;
+    // Aceptar tanto studentIds (array) como studentId (single)
+    let studentIds = req.body.studentIds;
+    if (!studentIds && req.body.studentId) {
+      studentIds = [req.body.studentId];
+    }
+    if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Se requiere al menos un estudiante' });
+    }
 
     const course = await Course.findByIdAndUpdate(
       req.params.id,
