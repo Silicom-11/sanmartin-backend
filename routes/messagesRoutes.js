@@ -4,6 +4,42 @@ const router = express.Router();
 const { auth } = require('../middleware/auth');
 const { Conversation, Message, User, Teacher, Parent } = require('../models');
 
+// Helper: resolve user from any collection (User, Teacher, Parent)
+async function resolveUser(userId) {
+  const fields = 'firstName lastName email role avatar';
+  let user = await User.findById(userId).select(fields).lean();
+  if (user) return user;
+  const teacher = await Teacher.findById(userId).select('firstName lastName email specialty avatar').lean();
+  if (teacher) return { ...teacher, role: 'docente' };
+  const parent = await Parent.findById(userId).select('firstName lastName email phone avatar').lean();
+  if (parent) return { ...parent, role: 'padre' };
+  return null;
+}
+
+// Helper: resolve all participants in conversations
+async function resolveParticipants(conversations) {
+  // Collect all unique participant IDs
+  const allIds = new Set();
+  for (const conv of conversations) {
+    for (const p of conv.participants || []) {
+      allIds.add((p._id || p).toString());
+    }
+  }
+
+  // Batch resolve from all collections
+  const idArray = [...allIds];
+  const users = await User.find({ _id: { $in: idArray } }).select('firstName lastName email role avatar').lean();
+  const teachers = await Teacher.find({ _id: { $in: idArray } }).select('firstName lastName email specialty avatar').lean();
+  const parents = await Parent.find({ _id: { $in: idArray } }).select('firstName lastName email phone avatar').lean();
+
+  const map = {};
+  for (const u of users) map[u._id.toString()] = u;
+  for (const t of teachers) { if (!map[t._id.toString()]) map[t._id.toString()] = { ...t, role: 'docente' }; }
+  for (const p of parents) { if (!map[p._id.toString()]) map[p._id.toString()] = { ...p, role: 'padre' }; }
+
+  return map;
+}
+
 // GET /api/messages/conversations - Obtener conversaciones del usuario
 router.get('/conversations', auth, async (req, res) => {
   try {
@@ -11,23 +47,39 @@ router.get('/conversations', auth, async (req, res) => {
       participants: req.userId,
       isActive: true
     })
-      .populate('participants', 'firstName lastName email role avatar')
       .populate('lastMessage.sender', 'firstName lastName')
       .sort({ 'lastMessage.sentAt': -1, updatedAt: -1 })
       .lean();
 
-    // Formatear para el frontend
+    // Resolve participants from all collections (User, Teacher, Parent)
+    const participantMap = await resolveParticipants(conversations);
+
+    // Also resolve lastMessage sender if not populated
+    for (const conv of conversations) {
+      if (conv.lastMessage?.sender && typeof conv.lastMessage.sender === 'string') {
+        conv.lastMessage.sender = participantMap[conv.lastMessage.sender] || null;
+      }
+    }
+
+    // Format for frontend
     const formattedConversations = conversations.map(conv => {
-      const otherParticipants = conv.participants.filter(
+      const resolvedParticipants = (conv.participants || [])
+        .map(p => {
+          const id = (p._id || p).toString();
+          return participantMap[id] || null;
+        })
+        .filter(Boolean);
+
+      const otherParticipants = resolvedParticipants.filter(
         p => p._id.toString() !== req.userId.toString()
       );
-      
-      const unreadCount = conv.unreadCount?.get(req.userId.toString()) || 0;
+
+      const unreadCount = conv.unreadCount?.[req.userId.toString()] || 0;
 
       return {
         _id: conv._id,
         type: conv.type,
-        name: conv.name || otherParticipants.map(p => `${p.firstName} ${p.lastName}`).join(', '),
+        name: conv.name || otherParticipants.map(p => `${p.firstName} ${p.lastName}`).join(', ') || 'Conversación',
         participants: otherParticipants,
         lastMessage: conv.lastMessage,
         unreadCount,
@@ -51,7 +103,7 @@ router.get('/conversations/:id', auth, async (req, res) => {
     const conversation = await Conversation.findOne({
       _id: req.params.id,
       participants: req.userId
-    }).populate('participants', 'firstName lastName email role avatar');
+    }).lean();
 
     if (!conversation) {
       return res.status(404).json({
@@ -60,21 +112,35 @@ router.get('/conversations/:id', auth, async (req, res) => {
       });
     }
 
+    // Resolve participants from all collections
+    const participantMap = await resolveParticipants([conversation]);
+
     const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Cap at 100
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
     const skip = (page - 1) * limit;
 
     const messages = await Message.find({
       conversation: conversation._id,
       isDeleted: false
     })
-      .populate('sender', 'firstName lastName avatar')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
-    // Marcar mensajes como leídos
+    // Resolve senders from all collections
+    const senderIds = [...new Set(messages.map(m => m.sender?.toString()).filter(Boolean))];
+    const senderMap = {};
+    for (const id of senderIds) {
+      senderMap[id] = participantMap[id] || await resolveUser(id);
+    }
+    for (const msg of messages) {
+      if (msg.sender) {
+        msg.sender = senderMap[msg.sender.toString()] || { _id: msg.sender, firstName: '?', lastName: '' };
+      }
+    }
+
+    // Mark messages as read
     await Message.updateMany(
       {
         conversation: conversation._id,
@@ -85,9 +151,11 @@ router.get('/conversations/:id', auth, async (req, res) => {
       }
     );
 
-    // Resetear contador de no leídos
-    conversation.unreadCount.set(req.userId.toString(), 0);
-    await conversation.save();
+    // Reset unread count
+    await Conversation.updateOne(
+      { _id: conversation._id },
+      { $set: { [`unreadCount.${req.userId.toString()}`]: 0 } }
+    );
 
     const total = await Message.countDocuments({
       conversation: conversation._id,
@@ -97,7 +165,10 @@ router.get('/conversations/:id', auth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        conversation,
+        conversation: {
+          ...conversation,
+          participants: (conversation.participants || []).map(p => participantMap[(p._id || p).toString()] || p),
+        },
         messages: messages.reverse(),
         pagination: {
           page,
@@ -178,12 +249,14 @@ router.post('/send', auth, async (req, res) => {
 
     await conversation.save();
 
-    // Poblar datos del mensaje
-    await message.populate('sender', 'firstName lastName avatar');
+    // Resolve sender from all collections
+    const senderData = await resolveUser(req.userId);
+    const messageObj = message.toObject();
+    messageObj.sender = senderData || { _id: req.userId, firstName: '?', lastName: '' };
 
     res.status(201).json({
       success: true,
-      data: message
+      data: messageObj
     });
   } catch (error) {
     console.error('Error enviando mensaje:', error);
@@ -267,16 +340,20 @@ router.get('/unread-count', auth, async (req, res) => {
     let totalUnread = 0;
     const userIdStr = req.userId.toString();
     conversations.forEach(conv => {
-      if (conv.unreadCount && conv.unreadCount[userIdStr]) {
-        totalUnread += conv.unreadCount[userIdStr];
+      // unreadCount is a Map in Mongoose but a plain object when using lean()
+      const uc = conv.unreadCount;
+      if (uc) {
+        if (typeof uc.get === 'function') {
+          totalUnread += uc.get(userIdStr) || 0;
+        } else if (uc[userIdStr]) {
+          totalUnread += uc[userIdStr];
+        }
       }
     });
 
-    const totalUnreadFinal = totalUnread;
-
     res.json({
       success: true,
-      data: { count: totalUnreadFinal }
+      data: { count: totalUnread }
     });
   } catch (error) {
     console.error('Error contando mensajes:', error);

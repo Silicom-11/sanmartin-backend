@@ -29,6 +29,9 @@ const justificationSchema = new mongoose.Schema({
     filename: String,
     originalName: String,
     path: String,
+    url: String,
+    key: String,
+    storage: { type: String, enum: ['local', 'r2'], default: 'local' },
     mimetype: String,
     size: Number,
     uploadedAt: {
@@ -36,10 +39,15 @@ const justificationSchema = new mongoose.Schema({
       default: Date.now,
     },
   }],
+  // Courses affected - for auto-justify when taking attendance
+  coursesAffected: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
+  }],
   // Estado de la solicitud
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'pendiente', 'aprobada', 'rechazada'],
+    enum: ['pending', 'approved', 'rejected'],
     default: 'pending',
   },
   // Revisión

@@ -238,7 +238,11 @@ router.post('/', auth, isTeacherOrAdmin, [
   body('studentId').notEmpty().withMessage('El estudiante es requerido'),
   body('courseId').notEmpty().withMessage('El curso es requerido'),
   body('date').isISO8601().withMessage('Fecha inválida'),
-  body('status').isIn(['present', 'absent', 'late', 'justified']).withMessage('Estado inválido'),
+  body('status').custom((val) => {
+    const mapped = STATUS_MAP[val] || val;
+    if (!['present', 'absent', 'late', 'justified'].includes(mapped)) throw new Error('Estado inválido');
+    return true;
+  }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -249,7 +253,8 @@ router.post('/', auth, isTeacherOrAdmin, [
       });
     }
 
-    const { studentId, courseId, date, status, arrivalTime, observations } = req.body;
+    const { studentId, courseId, date, status: rawStatus, arrivalTime, observations } = req.body;
+    const status = STATUS_MAP[rawStatus] || rawStatus;
     const attendanceDate = new Date(date);
 
     // Buscar si ya existe
@@ -296,31 +301,99 @@ router.post('/', auth, isTeacherOrAdmin, [
   }
 });
 
+// Status mapping: mobile sends Spanish, DB uses English
+const STATUS_MAP = {
+  presente: 'present', tardanza: 'late', ausente: 'absent', justificado: 'justified',
+  present: 'present', absent: 'absent', late: 'late', justified: 'justified',
+};
+
 // POST /api/attendance/bulk - Registrar asistencia masiva
+// Supports two formats:
+// Format A (dashboard): { courseId, date, students: [{ studentId, status }] }
+// Format B (mobile):    { records: [{ student, course, date, status }] }
 router.post('/bulk', auth, isTeacherOrAdmin, async (req, res) => {
   try {
-    const { courseId, date, students } = req.body;
-    const attendanceDate = new Date(date);
+    const { courseId, date, students, records } = req.body;
+
+    // Normalize input into a uniform list
+    let items = [];
+    if (records && Array.isArray(records)) {
+      // Format B (mobile)
+      items = records.map(r => ({
+        studentId: r.student || r.studentId,
+        courseId: r.course || r.courseId || courseId,
+        date: r.date || date,
+        status: STATUS_MAP[r.status] || r.status || 'present',
+        arrivalTime: r.arrivalTime,
+        observations: r.observations,
+      }));
+    } else if (students && Array.isArray(students)) {
+      // Format A (dashboard)
+      items = students.map(s => ({
+        studentId: s.studentId || s.student,
+        courseId: courseId,
+        date: date,
+        status: STATUS_MAP[s.status] || s.status || 'present',
+        arrivalTime: s.arrivalTime,
+        observations: s.observations,
+      }));
+    } else {
+      return res.status(400).json({ success: false, message: 'Se requiere records[] o students[]' });
+    }
+
+    // Load approved justifications for these dates to auto-justify
+    const { Justification } = require('../models');
+    const uniqueDates = [...new Set(items.map(i => i.date))];
+    const justifiedMap = {}; // studentId → justification
+
+    for (const d of uniqueDates) {
+      const dayStart = new Date(d);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(d);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      const justifications = await Justification.find({
+        status: 'approved',
+        dates: { $elemMatch: { $gte: dayStart, $lte: dayEnd } },
+      }).select('student reason');
+
+      justifications.forEach(j => {
+        const key = `${j.student.toString()}_${d}`;
+        justifiedMap[key] = j.reason;
+      });
+    }
 
     const results = [];
     const errors = [];
+    let autoJustified = 0;
 
-    for (const studentData of students) {
+    for (const item of items) {
       try {
+        // Check if student has approved justification → auto-set to justified
+        let finalStatus = item.status;
+        const justKey = `${item.studentId}_${item.date}`;
+        if (justifiedMap[justKey] && (finalStatus === 'absent' || finalStatus === 'late')) {
+          finalStatus = 'justified';
+          autoJustified++;
+        }
+
+        const attendanceDate = new Date(item.date);
+        const dayStart = new Date(item.date);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(item.date);
+        dayEnd.setHours(23, 59, 59, 999);
+
         const attendance = await Attendance.findOneAndUpdate(
           {
-            student: studentData.studentId,
-            course: courseId,
-            date: {
-              $gte: new Date(new Date(date).setHours(0, 0, 0, 0)),
-              $lte: new Date(new Date(date).setHours(23, 59, 59, 999)),
-            },
+            student: item.studentId,
+            course: item.courseId,
+            date: { $gte: dayStart, $lte: dayEnd },
           },
           {
             $set: {
-              status: studentData.status,
-              arrivalTime: studentData.arrivalTime,
-              observations: studentData.observations,
+              status: finalStatus,
+              arrivalTime: item.arrivalTime,
+              observations: item.observations || (justifiedMap[justKey] ? `Auto-justificado: ${justifiedMap[justKey]}` : undefined),
               teacher: req.userId,
               date: attendanceDate,
             },
@@ -329,28 +402,23 @@ router.post('/bulk', auth, isTeacherOrAdmin, async (req, res) => {
         );
         results.push(attendance);
       } catch (err) {
-        errors.push({
-          studentId: studentData.studentId,
-          error: err.message,
-        });
+        errors.push({ studentId: item.studentId, error: err.message });
       }
     }
 
     res.json({
       success: true,
-      message: `${results.length} registros de asistencia guardados`,
+      message: `${results.length} registros guardados${autoJustified > 0 ? ` (${autoJustified} auto-justificados)` : ''}`,
       data: {
         saved: results.length,
+        autoJustified,
         errors: errors.length,
         errorDetails: errors,
       },
     });
   } catch (error) {
     console.error('Bulk save attendance error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al guardar asistencia',
-    });
+    res.status(500).json({ success: false, message: 'Error al guardar asistencia' });
   }
 });
 
