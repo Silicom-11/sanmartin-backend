@@ -75,21 +75,60 @@ const gradeSchema = new mongoose.Schema({
   toObject: { virtuals: true },
 });
 
-// Método para calcular el promedio del bimestre
-gradeSchema.methods.calculateAverage = function() {
+// Método para calcular el promedio ponderado del bimestre
+// Usa los pesos (weight) de cada evaluación para ponderar las notas
+gradeSchema.methods.calculateAverage = async function() {
   const validScores = this.scores.filter(s => s.score !== null && s.score !== undefined);
   if (validScores.length === 0) {
     this.average = 0;
     return 0;
   }
-  const sum = validScores.reduce((acc, s) => acc + s.score, 0);
-  this.average = Math.round((sum / validScores.length) * 10) / 10;
-  return this.average;
+  
+  try {
+    // Obtener evaluaciones con sus pesos
+    const Evaluation = require('./Evaluation');
+    const evalIds = validScores.map(s => s.evaluation).filter(Boolean);
+    const evaluations = await Evaluation.find({ _id: { $in: evalIds } }).select('weight maxGrade').lean();
+    const evalMap = {};
+    evaluations.forEach(e => { evalMap[e._id.toString()] = e; });
+
+    let weightedSum = 0;
+    let totalWeight = 0;
+
+    for (const s of validScores) {
+      const evalDoc = evalMap[s.evaluation?.toString()];
+      const weight = evalDoc?.weight || 1;
+      const maxGrade = evalDoc?.maxGrade || 20;
+      // Normalizar a escala 0-20 si maxGrade difiere
+      const normalizedScore = maxGrade !== 20 ? (s.score / maxGrade) * 20 : s.score;
+      weightedSum += normalizedScore * weight;
+      totalWeight += weight;
+    }
+
+    this.average = totalWeight > 0 
+      ? Math.round((weightedSum / totalWeight) * 10) / 10 
+      : 0;
+    return this.average;
+  } catch (err) {
+    // Fallback: promedio simple si falla la consulta de pesos
+    const sum = validScores.reduce((acc, s) => acc + s.score, 0);
+    this.average = Math.round((sum / validScores.length) * 10) / 10;
+    return this.average;
+  }
 };
 
-// Pre-save: recalcular promedio
-gradeSchema.pre('save', function(next) {
-  this.calculateAverage();
+// Pre-save: recalcular promedio ponderado
+gradeSchema.pre('save', async function(next) {
+  try {
+    await this.calculateAverage();
+  } catch (err) {
+    // Fallback silencioso, no bloquear save
+    const validScores = this.scores.filter(s => s.score !== null && s.score !== undefined);
+    if (validScores.length > 0) {
+      const sum = validScores.reduce((acc, s) => acc + s.score, 0);
+      this.average = Math.round((sum / validScores.length) * 10) / 10;
+    }
+  }
   next();
 });
 

@@ -396,20 +396,38 @@ router.post('/save-score', auth, isTeacherOrAdmin, [
   }
 });
 
-// POST /api/grades/save-bulk - Guardar notas masivas para una evaluación
+// POST /api/grades/save-bulk - Guardar notas masivas (soporta multi-evaluación)
+// Acepta 2 formatos:
+//   A) { courseId, evaluationId, bimester, scores: [{ studentId, score, comments }] }  (una sola evaluación)
+//   B) { courseId, bimester, scores: [{ studentId, evaluationId, score, comments }] } (multi-evaluación)
 router.post('/save-bulk', auth, isTeacherOrAdmin, async (req, res) => {
   try {
-    const { courseId, evaluationId, bimester, academicYear, scores } = req.body;
-    // scores = [{ studentId, score, comments }]
+    const { courseId, bimester, academicYear } = req.body;
+    const topLevelEvalId = req.body.evaluationId; // puede ser undefined en formato B
+    const scores = req.body.scores || [];
     const year = academicYear || new Date().getFullYear();
+
+    if (!courseId || !bimester || !Array.isArray(scores) || scores.length === 0) {
+      return res.status(400).json({ success: false, message: 'courseId, bimester y scores son requeridos' });
+    }
+
+    // Agrupar scores por estudiante para hacer un solo save por estudiante
+    const studentScoresMap = {};
+    for (const item of scores) {
+      const sid = item.studentId;
+      const evalId = item.evaluationId || topLevelEvalId;
+      if (!sid || !evalId) continue;
+      if (!studentScoresMap[sid]) studentScoresMap[sid] = [];
+      studentScoresMap[sid].push({ evaluationId: evalId, score: item.score, comments: item.comments || '' });
+    }
 
     const results = [];
     const errors = [];
 
-    for (const item of scores) {
+    for (const [studentId, scoreItems] of Object.entries(studentScoresMap)) {
       try {
         let grade = await Grade.findOne({
-          student: item.studentId,
+          student: studentId,
           course: courseId,
           bimester,
           academicYear: year,
@@ -417,7 +435,7 @@ router.post('/save-bulk', auth, isTeacherOrAdmin, async (req, res) => {
 
         if (!grade) {
           grade = new Grade({
-            student: item.studentId,
+            student: studentId,
             course: courseId,
             bimester,
             academicYear: year,
@@ -427,33 +445,36 @@ router.post('/save-bulk', auth, isTeacherOrAdmin, async (req, res) => {
         }
 
         if (grade.status === 'cerrado' || grade.status === 'publicado') {
-          errors.push({ studentId: item.studentId, error: 'Bimestre cerrado' });
+          errors.push({ studentId, error: 'Bimestre cerrado' });
           continue;
         }
 
-        const existingIdx = grade.scores.findIndex(
-          s => s.evaluation.toString() === evaluationId
-        );
+        // Aplicar cada score para este estudiante
+        for (const si of scoreItems) {
+          const existingIdx = grade.scores.findIndex(
+            s => s.evaluation && s.evaluation.toString() === si.evaluationId
+          );
 
-        if (existingIdx >= 0) {
-          grade.scores[existingIdx].score = item.score;
-          grade.scores[existingIdx].comments = item.comments || '';
-          grade.scores[existingIdx].gradedAt = new Date();
-          grade.scores[existingIdx].gradedBy = req.userId;
-        } else {
-          grade.scores.push({
-            evaluation: evaluationId,
-            score: item.score,
-            comments: item.comments || '',
-            gradedAt: new Date(),
-            gradedBy: req.userId,
-          });
+          if (existingIdx >= 0) {
+            grade.scores[existingIdx].score = si.score;
+            grade.scores[existingIdx].comments = si.comments;
+            grade.scores[existingIdx].gradedAt = new Date();
+            grade.scores[existingIdx].gradedBy = req.userId;
+          } else {
+            grade.scores.push({
+              evaluation: si.evaluationId,
+              score: si.score,
+              comments: si.comments,
+              gradedAt: new Date(),
+              gradedBy: req.userId,
+            });
+          }
         }
 
-        await grade.save();
+        await grade.save(); // pre-save recalcula promedio ponderado
         results.push(grade);
       } catch (err) {
-        errors.push({ studentId: item.studentId, error: err.message });
+        errors.push({ studentId, error: err.message });
       }
     }
 
