@@ -2,18 +2,46 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { Student, User } = require('../models');
+const { Student, User, Parent } = require('../models');
 const { auth, authorize, isParentOf } = require('../middleware/auth');
 
 // GET /api/students/my-children - Obtener hijos del padre autenticado
 router.get('/my-children', auth, authorize('padre'), async (req, res) => {
   try {
-    const students = await Student.find({
+    // Strategy 1: Students whose parent field matches this user
+    let students = await Student.find({
       parent: req.userId,
       isActive: true,
     })
       .populate('courses', 'name code')
       .sort({ firstName: 1 });
+
+    // Strategy 2: If none found, check the Parent model's children array
+    if (students.length === 0) {
+      const parent = await Parent.findById(req.userId);
+      if (parent?.children?.length > 0) {
+        const studentIds = parent.children.map(c => c.student);
+        students = await Student.find({
+          _id: { $in: studentIds },
+          isActive: true,
+        })
+          .populate('courses', 'name code')
+          .sort({ firstName: 1 });
+      }
+    }
+
+    // Strategy 3: Check guardians array in Student documents
+    if (students.length === 0) {
+      students = await Student.find({
+        $or: [
+          { 'guardians.user': req.userId },
+          { 'guardians.parent': req.userId },
+        ],
+        isActive: true,
+      })
+        .populate('courses', 'name code')
+        .sort({ firstName: 1 });
+    }
 
     res.json({
       success: true,
@@ -36,7 +64,15 @@ router.get('/', auth, async (req, res) => {
     
     // Si es padre, solo ver sus estudiantes
     if (req.user.role === 'padre') {
-      query._id = { $in: req.user.students };
+      // Build list of student IDs from Parent model children array + user.students
+      const childIds = [];
+      if (req.user.students?.length) childIds.push(...req.user.students);
+      if (req.user.children?.length) childIds.push(...req.user.children.map(c => c.student));
+      if (childIds.length > 0) {
+        query._id = { $in: childIds };
+      } else {
+        query._id = { $in: [] }; // empty result
+      }
     }
     
     // Filtros opcionales
