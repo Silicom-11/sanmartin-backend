@@ -40,9 +40,11 @@ const messageSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Índices para búsquedas eficientes
+// Indices para busquedas eficientes
 messageSchema.index({ conversation: 1, createdAt: -1 });
 messageSchema.index({ sender: 1 });
+messageSchema.index({ conversation: 1, isDeleted: 1, createdAt: -1 }); // Para paginacion de mensajes
+messageSchema.index({ conversation: 1, 'readBy.user': 1 }); // Para marcar como leido
 
 const Message = mongoose.model('Message', messageSchema);
 

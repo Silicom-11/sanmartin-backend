@@ -1,4 +1,7 @@
 // Modelo de Calificación - San Martín Digital
+// Un documento Grade por estudiante + curso + bimestre
+// Las notas (scores) se vinculan a Evaluaciones creadas por el docente
+
 const mongoose = require('mongoose');
 
 const gradeSchema = new mongoose.Schema({
@@ -12,116 +15,89 @@ const gradeSchema = new mongoose.Schema({
     ref: 'Course',
     required: [true, 'El curso es requerido'],
   },
-  teacher: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: [true, 'El docente es requerido'],
-  },
-  // Calificaciones por tipo
-  evaluations: [{
-    type: {
-      type: String,
-      enum: ['examen', 'tarea', 'participacion', 'proyecto', 'practica'],
-      required: true,
-    },
-    name: {
-      type: String,
-      required: true,
-    },
-    grade: {
-      type: Number,
-      min: 0,
-      max: 20,
-      required: true,
-    },
-    weight: {
-      type: Number,
-      default: 1,
-    },
-    date: {
-      type: Date,
-      default: Date.now,
-    },
-    observations: String,
-  }],
-  // Promedios calculados
-  averages: {
-    exams: { type: Number, default: 0 },
-    tasks: { type: Number, default: 0 },
-    participation: { type: Number, default: 0 },
-    projects: { type: Number, default: 0 },
-    final: { type: Number, default: 0 },
-  },
-  // Período
-  period: {
-    type: String,
-    enum: ['Primer Trimestre', 'Segundo Trimestre', 'Tercer Trimestre', 'Anual'],
-    required: true,
+  bimester: {
+    type: Number,
+    enum: [1, 2, 3, 4],
+    required: [true, 'El bimestre es requerido'],
   },
   academicYear: {
     type: Number,
     default: () => new Date().getFullYear(),
   },
-  // Estado
+  // Notas individuales vinculadas a evaluaciones del docente
+  scores: [{
+    evaluation: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Evaluation',
+      required: true,
+    },
+    score: {
+      type: Number,
+      min: 0,
+      max: 20,
+      default: null,
+    },
+    comments: {
+      type: String,
+      trim: true,
+    },
+    gradedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    gradedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+    },
+  }],
+  // Promedio del bimestre (calculado automáticamente)
+  average: {
+    type: Number,
+    default: 0,
+  },
+  // Estado del bimestre
   status: {
     type: String,
-    enum: ['pendiente', 'en-proceso', 'completado', 'publicado'],
-    default: 'pendiente',
+    enum: ['abierto', 'cerrado', 'publicado'],
+    default: 'abierto',
   },
-  isPublished: {
-    type: Boolean,
-    default: false,
+  closedAt: Date,
+  closedBy: {
+    type: mongoose.Schema.Types.ObjectId,
   },
   publishedAt: Date,
+  teacher: {
+    type: mongoose.Schema.Types.ObjectId,
+    // Puede ser User o Teacher (dual collection)
+  },
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true },
 });
 
-// Método para calcular promedios
-gradeSchema.methods.calculateAverages = function() {
-  const evaluationsByType = {};
-  
-  this.evaluations.forEach(evalItem => {
-    if (!evaluationsByType[evalItem.type]) {
-      evaluationsByType[evalItem.type] = [];
-    }
-    evaluationsByType[evalItem.type].push(evalItem.grade);
-  });
-  
-  // Calcular promedio por tipo
-  const calculateAverage = (grades) => {
-    if (!grades || grades.length === 0) return 0;
-    return grades.reduce((a, b) => a + b, 0) / grades.length;
-  };
-  
-  this.averages.exams = calculateAverage(evaluationsByType.examen);
-  this.averages.tasks = calculateAverage(evaluationsByType.tarea);
-  this.averages.participation = calculateAverage(evaluationsByType.participacion);
-  this.averages.projects = calculateAverage(evaluationsByType.proyecto);
-  
-  // Calcular promedio final (con pesos por defecto)
-  this.averages.final = (
-    this.averages.exams * 0.4 +
-    this.averages.tasks * 0.3 +
-    this.averages.participation * 0.1 +
-    this.averages.projects * 0.2
-  );
-  
-  return this.averages;
+// Método para calcular el promedio del bimestre
+gradeSchema.methods.calculateAverage = function() {
+  const validScores = this.scores.filter(s => s.score !== null && s.score !== undefined);
+  if (validScores.length === 0) {
+    this.average = 0;
+    return 0;
+  }
+  const sum = validScores.reduce((acc, s) => acc + s.score, 0);
+  this.average = Math.round((sum / validScores.length) * 10) / 10;
+  return this.average;
 };
 
-// Pre-save hook para calcular promedios
+// Pre-save: recalcular promedio
 gradeSchema.pre('save', function(next) {
-  this.calculateAverages();
+  this.calculateAverage();
   next();
 });
 
 // Índices compuestos
-gradeSchema.index({ student: 1, course: 1, period: 1, academicYear: 1 }, { unique: true });
-gradeSchema.index({ course: 1, period: 1 });
+gradeSchema.index({ student: 1, course: 1, bimester: 1, academicYear: 1 }, { unique: true });
+gradeSchema.index({ course: 1, bimester: 1, academicYear: 1 });
 gradeSchema.index({ teacher: 1 });
+gradeSchema.index({ student: 1, academicYear: 1 });
 
 const Grade = mongoose.model('Grade', gradeSchema);
 

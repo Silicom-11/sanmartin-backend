@@ -25,6 +25,7 @@ const Parent = require('./Parent');
 // ==========================================
 const Course = require('./Course');          // Legacy - mantener compatibilidad
 const Grade = require('./Grade');
+const Evaluation = require('./Evaluation');
 const Attendance = require('./Attendance');
 
 // ==========================================
@@ -64,6 +65,7 @@ module.exports = {
   // Académicos
   Course,       // Legacy
   Grade,
+  Evaluation,
   Attendance,
   
   // Administrativos

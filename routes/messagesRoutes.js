@@ -13,7 +13,8 @@ router.get('/conversations', auth, async (req, res) => {
     })
       .populate('participants', 'firstName lastName email role avatar')
       .populate('lastMessage.sender', 'firstName lastName')
-      .sort({ 'lastMessage.sentAt': -1, updatedAt: -1 });
+      .sort({ 'lastMessage.sentAt': -1, updatedAt: -1 })
+      .lean();
 
     // Formatear para el frontend
     const formattedConversations = conversations.map(conv => {
@@ -60,7 +61,7 @@ router.get('/conversations/:id', auth, async (req, res) => {
     }
 
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Cap at 100
     const skip = (page - 1) * limit;
 
     const messages = await Message.find({
@@ -70,7 +71,8 @@ router.get('/conversations/:id', auth, async (req, res) => {
       .populate('sender', 'firstName lastName avatar')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean();
 
     // Marcar mensajes como leídos
     await Message.updateMany(
@@ -254,22 +256,27 @@ router.get('/contacts', auth, async (req, res) => {
   }
 });
 
-// GET /api/messages/unread-count - Contar mensajes no leídos
+// GET /api/messages/unread-count - Contar mensajes no leidos
 router.get('/unread-count', auth, async (req, res) => {
   try {
     const conversations = await Conversation.find({
       participants: req.userId,
       isActive: true
-    });
+    }).select('unreadCount').lean();
 
     let totalUnread = 0;
+    const userIdStr = req.userId.toString();
     conversations.forEach(conv => {
-      totalUnread += conv.unreadCount?.get(req.userId.toString()) || 0;
+      if (conv.unreadCount && conv.unreadCount[userIdStr]) {
+        totalUnread += conv.unreadCount[userIdStr];
+      }
     });
+
+    const totalUnreadFinal = totalUnread;
 
     res.json({
       success: true,
-      data: { count: totalUnread }
+      data: { count: totalUnreadFinal }
     });
   } catch (error) {
     console.error('Error contando mensajes:', error);

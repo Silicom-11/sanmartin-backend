@@ -33,6 +33,7 @@ const eventsRoutes = require('./routes/eventsRoutes');
 const academicSettingsRoutes = require('./routes/academicSettingsRoutes');
 const messagesRoutes = require('./routes/messagesRoutes');
 const locationRoutes = require('./routes/locationRoutes');
+const evaluationRoutes = require('./routes/evaluationRoutes');
 // CRUD de Docentes, Padres y Estudiantes (nuevas colecciones)
 const teacherRoutes = require('./routes/teacherRoutes');
 const parentsManagementRoutes = require('./routes/parentsManagementRoutes');
@@ -124,6 +125,7 @@ app.use('/api/events', eventsRoutes);
 app.use('/api/academic-settings', academicSettingsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/location', locationRoutes);
+app.use('/api/evaluations', evaluationRoutes);
 // CRUD de Docentes, Padres y Estudiantes (nuevas colecciones)
 app.use('/api/teachers', teacherRoutes);
 app.use('/api/parents-management', parentsManagementRoutes);

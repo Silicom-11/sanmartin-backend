@@ -120,27 +120,28 @@ router.get('/', auth, async (req, res) => {
 // GET /api/courses/:id - Obtener un curso
 router.get('/:id', auth, async (req, res) => {
   try {
-    const course = await Course.findById(req.params.id)
+    let course = await Course.findById(req.params.id)
       .populate('teacher', 'firstName lastName email')
-      .populate('students', 'firstName lastName enrollmentNumber gradeLevel');
+      .populate('students', 'firstName lastName enrollmentNumber gradeLevel section');
 
     if (!course) {
-      return res.status(404).json({
-        success: false,
-        message: 'Curso no encontrado',
-      });
+      return res.status(404).json({ success: false, message: 'Curso no encontrado' });
     }
 
-    res.json({
-      success: true,
-      data: { course },
-    });
+    // Si teacher no se pobló (está en Teacher collection), buscar ahí
+    let result = course.toObject();
+    if (course.teacher === null && course._doc?.teacher) {
+      const teacherDoc = await Teacher.findById(course._doc.teacher).select('firstName lastName email').lean();
+      if (teacherDoc) result.teacher = teacherDoc;
+    } else if (!course.teacher && result.teacher) {
+      const teacherDoc = await Teacher.findById(result.teacher).select('firstName lastName email').lean();
+      if (teacherDoc) result.teacher = teacherDoc;
+    }
+
+    res.json({ success: true, data: { course: result } });
   } catch (error) {
     console.error('Get course error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al obtener curso',
-    });
+    res.status(500).json({ success: false, message: 'Error al obtener curso' });
   }
 });
 
@@ -159,7 +160,7 @@ router.post('/', auth, authorize('administrativo'), [
       });
     }
 
-    const { name, code, description, gradeLevel, section, teacherId, schedule, evaluationWeights } = req.body;
+    const { name, code, description, gradeLevel, section, teacherId, schedule, evaluationWeights, studentIds } = req.body;
 
     // Verificar código único
     const existingCourse = await Course.findOne({ code: code.toUpperCase() });
@@ -186,6 +187,13 @@ router.post('/', auth, authorize('administrativo'), [
       teacherRef = teacherId;
     }
 
+    // Verificar estudiantes si se proporcionan
+    let validStudentIds = [];
+    if (studentIds && Array.isArray(studentIds) && studentIds.length > 0) {
+      const students = await Student.find({ _id: { $in: studentIds } });
+      validStudentIds = students.map(s => s._id);
+    }
+
     const course = await Course.create({
       name,
       code: code.toUpperCase(),
@@ -193,6 +201,7 @@ router.post('/', auth, authorize('administrativo'), [
       gradeLevel,
       section: section || 'A',
       teacher: teacherRef,
+      students: validStudentIds,
       schedule,
       evaluationWeights,
     });
@@ -207,12 +216,28 @@ router.post('/', auth, authorize('administrativo'), [
       }).catch(() => {});
     }
 
-    await course.populate('teacher', 'firstName lastName');
+    // Agregar curso a cada estudiante
+    if (validStudentIds.length > 0) {
+      await Student.updateMany(
+        { _id: { $in: validStudentIds } },
+        { $addToSet: { courses: course._id } }
+      );
+    }
+
+    // Populate teacher from either collection
+    let populatedCourse = course.toObject();
+    if (teacherRef) {
+      let teacherDoc = await User.findById(teacherRef).select('firstName lastName email').lean();
+      if (!teacherDoc) {
+        teacherDoc = await Teacher.findById(teacherRef).select('firstName lastName email').lean();
+      }
+      populatedCourse.teacher = teacherDoc;
+    }
 
     res.status(201).json({
       success: true,
       message: 'Curso creado exitosamente',
-      data: { course },
+      data: { course: populatedCourse },
     });
   } catch (error) {
     console.error('Create course error:', error);
@@ -227,30 +252,53 @@ router.post('/', auth, authorize('administrativo'), [
 // PUT /api/courses/:id - Actualizar curso
 router.put('/:id', auth, authorize('administrativo'), async (req, res) => {
   try {
+    const updateData = { ...req.body };
+
+    // Si se envía teacherId, convertirlo a teacher y validar
+    if (updateData.teacherId !== undefined) {
+      if (updateData.teacherId) {
+        let teacher = await User.findOne({ _id: updateData.teacherId, role: 'docente' });
+        if (!teacher) {
+          teacher = await Teacher.findById(updateData.teacherId);
+        }
+        if (!teacher) {
+          return res.status(400).json({ success: false, message: 'Docente no encontrado' });
+        }
+        updateData.teacher = updateData.teacherId;
+      } else {
+        updateData.teacher = null;
+      }
+      delete updateData.teacherId;
+    }
+
     const course = await Course.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      updateData,
       { new: true, runValidators: true }
-    ).populate('teacher', 'firstName lastName');
+    );
 
     if (!course) {
-      return res.status(404).json({
-        success: false,
-        message: 'Curso no encontrado',
-      });
+      return res.status(404).json({ success: false, message: 'Curso no encontrado' });
+    }
+
+    // Populate teacher from either collection
+    let result = course.toObject();
+    if (result.teacher) {
+      let teacherDoc = await User.findById(result.teacher).select('firstName lastName email').lean();
+      if (!teacherDoc) {
+        teacherDoc = await Teacher.findById(result.teacher).select('firstName lastName email').lean();
+      }
+      result.teacher = teacherDoc;
     }
 
     res.json({
       success: true,
       message: 'Curso actualizado',
-      data: { course },
+      data: { course: result },
     });
   } catch (error) {
     console.error('Update course error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al actualizar curso',
-    });
+    res.status(500).json({ success: false, message: 'Error al actualizar curso' });
   }
 });
 

@@ -31,8 +31,8 @@ const courseSchema = new mongoose.Schema({
   },
   teacher: {
     type: mongoose.Schema.Types.ObjectId,
+    // Puede ser User o Teacher (dual collection support)
     ref: 'User',
-    required: [true, 'El docente es requerido'],
   },
   students: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -61,7 +61,7 @@ const courseSchema = new mongoose.Schema({
   },
   period: {
     type: String,
-    enum: ['Anual', 'Primer Trimestre', 'Segundo Trimestre', 'Tercer Trimestre'],
+    enum: ['Anual', 'Bimestre 1', 'Bimestre 2', 'Bimestre 3', 'Bimestre 4'],
     default: 'Anual',
   },
   isActive: {

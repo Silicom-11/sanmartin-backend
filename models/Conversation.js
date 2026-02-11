@@ -39,9 +39,11 @@ const conversationSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Índices
+// Indices
 conversationSchema.index({ participants: 1 });
 conversationSchema.index({ 'lastMessage.sentAt': -1 });
+conversationSchema.index({ type: 1, participants: 1 }); // Para findOrCreateDirect
+conversationSchema.index({ participants: 1, isActive: 1, 'lastMessage.sentAt': -1 }); // Para listar conversaciones
 
 // Método para obtener el otro participante en conversación directa
 conversationSchema.methods.getOtherParticipant = function(userId) {
