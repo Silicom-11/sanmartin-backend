@@ -26,7 +26,7 @@ const courseSchema = new mongoose.Schema({
   },
   section: {
     type: String,
-    enum: ['A', 'B', 'C', 'D'],
+    enum: ['A', 'B', 'C', 'D', 'E', 'F'],
     default: 'A',
   },
   teacher: {
