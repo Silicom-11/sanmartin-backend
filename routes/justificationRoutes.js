@@ -5,9 +5,23 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { Justification, Attendance, Student, Notification, Parent } = require('../models');
+const { Justification, Attendance, Student, Notification, Parent, User } = require('../models');
 const { auth, authorize } = require('../middleware/auth');
 const r2Storage = require('../services/r2Storage');
+
+// Helper: resolve parent info from Parent or User collection (dual collection problem)
+const resolveParent = async (parentId) => {
+  if (!parentId) return null;
+  // Try Parent collection first
+  let parent = await Parent.findById(parentId).select('firstName lastName email phone userId').lean();
+  if (parent) return parent;
+  // Try User collection
+  parent = await User.findById(parentId).select('firstName lastName email phone').lean();
+  if (parent) return parent;
+  // Try finding Parent by userId
+  parent = await Parent.findOne({ userId: parentId }).select('firstName lastName email phone userId').lean();
+  return parent;
+};
 
 // Use memory storage so we get buffers for R2 upload
 const upload = multer({
@@ -81,15 +95,24 @@ router.get('/', auth, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(100);
 
-    // Add document URLs
-    const result = justifications.map(j => {
+    // Add document URLs + resolve parent from either collection
+    const result = [];
+    for (const j of justifications) {
       const obj = j.toObject();
+      // Resolve parent if populate returned null (dual collection problem)
+      if (!obj.parent && j._doc?.parent) {
+        obj.parent = await resolveParent(j._doc.parent);
+      } else if (!obj.parent && obj.parent === null) {
+        // Try raw query to get the stored ObjectId
+        const raw = await Justification.findById(j._id).select('parent').lean();
+        if (raw?.parent) obj.parent = await resolveParent(raw.parent);
+      }
       obj.documents = (obj.documents || []).map(doc => ({
         ...doc,
         url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : (doc.path ? `/uploads/${doc.path}` : null)),
       }));
-      return obj;
-    });
+      result.push(obj);
+    }
 
     res.json({ success: true, count: result.length, data: result });
   } catch (error) {
@@ -109,14 +132,19 @@ router.get('/student/:studentId', auth, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(50);
 
-    const result = justifications.map(j => {
+    const result = [];
+    for (const j of justifications) {
       const obj = j.toObject();
+      if (!obj.parent) {
+        const raw = await Justification.findById(j._id).select('parent').lean();
+        if (raw?.parent) obj.parent = await resolveParent(raw.parent);
+      }
       obj.documents = (obj.documents || []).map(doc => ({
         ...doc,
         url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
       }));
-      return obj;
-    });
+      result.push(obj);
+    }
 
     res.json({ success: true, data: result });
   } catch (error) {
@@ -193,29 +221,36 @@ router.get('/approved-for-date', auth, async (req, res) => {
     })
       .populate('student', 'firstName lastName')
       .populate('parent', 'firstName lastName')
-      .select('student parent reason dates documents observations createdAt');
+      .select('student parent reason dates documents observations createdAt')
+      .lean();
 
     const justifiedStudents = {};
-    justifications.forEach(j => {
+    for (const j of justifications) {
       const sid = j.student?._id?.toString();
-      if (sid) {
-        justifiedStudents[sid] = {
-          reason: j.reason,
-          hasDocuments: (j.documents || []).length > 0,
-          documentCount: (j.documents || []).length,
-          justificationId: j._id,
-          parentName: j.parent ? `${j.parent.firstName} ${j.parent.lastName}` : null,
-          observations: j.observations || null,
-          documents: (j.documents || []).map(doc => ({
-            name: doc.originalName || doc.filename,
-            url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
-            mimetype: doc.mimetype,
-            storage: doc.storage,
-          })),
-          createdAt: j.createdAt,
-        };
+      if (!sid) continue;
+      // Resolve parent if populate returned null
+      let parentDoc = j.parent;
+      if (!parentDoc) {
+        // Get raw parent ID from a lean query without populate
+        const raw = await Justification.findById(j._id).select('parent').lean();
+        if (raw?.parent) parentDoc = await resolveParent(raw.parent);
       }
-    });
+      justifiedStudents[sid] = {
+        reason: j.reason,
+        hasDocuments: (j.documents || []).length > 0,
+        documentCount: (j.documents || []).length,
+        justificationId: j._id,
+        parentName: parentDoc ? `${parentDoc.firstName} ${parentDoc.lastName}` : null,
+        observations: j.observations || null,
+        documents: (j.documents || []).map(doc => ({
+          name: doc.originalName || doc.filename,
+          url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+          mimetype: doc.mimetype,
+          storage: doc.storage,
+        })),
+        createdAt: j.createdAt,
+      };
+    }
 
     res.json({ success: true, data: justifiedStudents });
   } catch (error) {
@@ -244,34 +279,40 @@ router.get('/for-date', auth, async (req, res) => {
       .populate('student', 'firstName lastName gradeLevel section')
       .populate('parent', 'firstName lastName email phone')
       .select('student parent reason dates documents observations status createdAt reviewedAt reviewNote')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     const result = {};
-    justifications.forEach(j => {
+    for (const j of justifications) {
       const sid = j.student?._id?.toString();
-      if (sid) {
-        result[sid] = {
-          justificationId: j._id,
-          status: j.status,
-          reason: j.reason,
-          observations: j.observations || null,
-          parentName: j.parent ? `${j.parent.firstName} ${j.parent.lastName}` : null,
-          parentEmail: j.parent?.email,
-          parentPhone: j.parent?.phone,
-          documents: (j.documents || []).map(doc => ({
-            name: doc.originalName || doc.filename,
-            url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
-            mimetype: doc.mimetype,
-            size: doc.size,
-            storage: doc.storage,
-          })),
-          documentCount: (j.documents || []).length,
-          createdAt: j.createdAt,
-          reviewedAt: j.reviewedAt,
-          reviewNote: j.reviewNote,
-        };
+      if (!sid) continue;
+      // Resolve parent if populate returned null
+      let parentDoc = j.parent;
+      if (!parentDoc) {
+        const raw = await Justification.findById(j._id).select('parent').lean();
+        if (raw?.parent) parentDoc = await resolveParent(raw.parent);
       }
-    });
+      result[sid] = {
+        justificationId: j._id,
+        status: j.status,
+        reason: j.reason,
+        observations: j.observations || null,
+        parentName: parentDoc ? `${parentDoc.firstName} ${parentDoc.lastName}` : null,
+        parentEmail: parentDoc?.email,
+        parentPhone: parentDoc?.phone,
+        documents: (j.documents || []).map(doc => ({
+          name: doc.originalName || doc.filename,
+          url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+          mimetype: doc.mimetype,
+          size: doc.size,
+          storage: doc.storage,
+        })),
+        documentCount: (j.documents || []).length,
+        createdAt: j.createdAt,
+        reviewedAt: j.reviewedAt,
+        reviewNote: j.reviewNote,
+      };
+    }
 
     res.json({ success: true, data: result });
   } catch (error) {
@@ -292,11 +333,26 @@ router.get('/:id', auth, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Justificación no encontrada' });
     }
 
-    if (req.user.role === 'padre' && justification.parent._id.toString() !== req.userId.toString()) {
-      return res.status(403).json({ success: false, message: 'No tiene acceso' });
+    const obj = justification.toObject();
+    
+    // Resolve parent if populate returned null (dual collection problem)
+    if (!obj.parent) {
+      const raw = await Justification.findById(justification._id).select('parent').lean();
+      if (raw?.parent) obj.parent = await resolveParent(raw.parent);
     }
 
-    const obj = justification.toObject();
+    // Access check for parents
+    if (req.user.role === 'padre') {
+      const parentId = obj.parent?._id?.toString();
+      if (parentId !== req.userId.toString()) {
+        // Also check if parent's userId matches
+        const parentUserId = obj.parent?.userId?.toString();
+        if (parentUserId !== req.userId.toString()) {
+          return res.status(403).json({ success: false, message: 'No tiene acceso' });
+        }
+      }
+    }
+
     obj.documents = (obj.documents || []).map(doc => ({
       ...doc,
       url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
@@ -416,7 +472,6 @@ router.post('/', auth, authorize('padre'), upload.array('documents', 5), async (
 
     // Notify admins
     try {
-      const { User } = require('../models');
       const admins = await User.find({ role: 'administrativo', isActive: true }).select('_id');
       if (admins.length > 0) {
         await Notification.create(admins.map(a => ({

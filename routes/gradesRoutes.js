@@ -6,6 +6,16 @@ const { body, validationResult } = require('express-validator');
 const { Grade, Course, Student, Evaluation, Teacher } = require('../models');
 const { auth, authorize, isTeacherOrAdmin } = require('../middleware/auth');
 
+// Helper: resolve all possible teacher IDs (dual collection problem)
+const getTeacherIds = async (userId) => {
+  const ids = [userId];
+  const teacherDoc = await Teacher.findById(userId).select('userId').lean();
+  if (teacherDoc?.userId) ids.push(teacherDoc.userId);
+  const teacherByUser = await Teacher.findOne({ userId }).select('_id').lean();
+  if (teacherByUser) ids.push(teacherByUser._id);
+  return ids;
+};
+
 // ==========================================
 // ESTADÍSTICAS
 // ==========================================
@@ -638,7 +648,10 @@ router.get('/', auth, async (req, res) => {
     if (req.query.studentId) query.student = req.query.studentId;
     if (req.query.bimester) query.bimester = parseInt(req.query.bimester);
     if (req.query.year) query.academicYear = parseInt(req.query.year);
-    if (req.user.role === 'docente') query.teacher = req.userId;
+    if (req.user.role === 'docente') {
+      const teacherIds = await getTeacherIds(req.userId);
+      query.teacher = { $in: teacherIds };
+    }
 
     const grades = await Grade.find(query)
       .populate('student', 'firstName lastName enrollmentNumber')

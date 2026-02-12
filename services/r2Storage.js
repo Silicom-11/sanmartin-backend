@@ -3,6 +3,7 @@
 // Falls back to local storage if R2 is not configured.
 
 const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -64,9 +65,12 @@ const uploadFile = async (buffer, originalName, mimetype, folder = 'uploads') =>
 
   await client.send(command);
 
+  // Don't store the S3 API endpoint as URL — it requires auth.
+  // Instead, store the key and generate presigned URLs on demand.
+  // Only use R2_PUBLIC_URL if a custom domain/R2.dev is configured.
   const publicUrl = process.env.R2_PUBLIC_URL
     ? `${process.env.R2_PUBLIC_URL}/${uniqueName}`
-    : `https://${process.env.R2_BUCKET_NAME}.${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${uniqueName}`;
+    : null; // Will use presigned URLs via getFileUrl()
 
   return {
     key: uniqueName,
@@ -118,8 +122,9 @@ const deleteFile = async (key) => {
 };
 
 /**
- * Get a file URL
+ * Get a file URL — generates presigned URL for R2, or local path
  * @param {string} key - The object key
+ * @returns {string|null}
  */
 const getFileUrl = (key) => {
   if (!key) return null;
@@ -127,7 +132,51 @@ const getFileUrl = (key) => {
   if (process.env.R2_PUBLIC_URL) {
     return `${process.env.R2_PUBLIC_URL}/${key}`;
   }
+  // For R2 keys without public URL, serve through our proxy endpoint
+  if (isR2Configured() && !key.startsWith('/')) {
+    return `/api/uploads/r2/${encodeURIComponent(key)}`;
+  }
   return `/uploads/${key}`;
+};
+
+/**
+ * Generate a presigned URL for a file in R2
+ * @param {string} key - The object key
+ * @param {number} expiresIn - URL expiry in seconds (default 1 hour)
+ * @returns {string|null}
+ */
+const getPresignedUrl = async (key, expiresIn = 3600) => {
+  const client = getS3Client();
+  if (!client || !key) return null;
+
+  const command = new GetObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME,
+    Key: key,
+  });
+
+  return getSignedUrl(client, command, { expiresIn });
+};
+
+/**
+ * Stream a file from R2
+ * @param {string} key - The object key
+ * @returns {{ stream, contentType, contentLength }}
+ */
+const getFileStream = async (key) => {
+  const client = getS3Client();
+  if (!client || !key) return null;
+
+  const command = new GetObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME,
+    Key: key,
+  });
+
+  const response = await client.send(command);
+  return {
+    stream: response.Body,
+    contentType: response.ContentType,
+    contentLength: response.ContentLength,
+  };
 };
 
 module.exports = {
@@ -135,5 +184,7 @@ module.exports = {
   uploadMulterFile,
   deleteFile,
   getFileUrl,
+  getPresignedUrl,
+  getFileStream,
   isR2Configured,
 };

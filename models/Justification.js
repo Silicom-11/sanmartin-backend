@@ -9,7 +9,7 @@ const justificationSchema = new mongoose.Schema({
   },
   parent: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Parent',
     required: [true, 'El apoderado es requerido'],
   },
   dates: [{

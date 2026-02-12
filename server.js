@@ -92,6 +92,28 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Servir archivos estáticos (uploads)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// R2 file proxy — streams files from Cloudflare R2 to the client
+const r2Storage = require('./services/r2Storage');
+app.get('/api/uploads/r2/:key(*)', async (req, res) => {
+  try {
+    const key = decodeURIComponent(req.params.key);
+    if (!r2Storage.isR2Configured()) {
+      return res.status(404).json({ success: false, message: 'R2 not configured' });
+    }
+    const result = await r2Storage.getFileStream(key);
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'File not found' });
+    }
+    res.set('Content-Type', result.contentType || 'application/octet-stream');
+    if (result.contentLength) res.set('Content-Length', result.contentLength.toString());
+    res.set('Cache-Control', 'public, max-age=86400');
+    result.stream.pipe(res);
+  } catch (error) {
+    console.error('R2 proxy error:', error.message);
+    res.status(500).json({ success: false, message: 'Error retrieving file' });
+  }
+});
+
 // Conexión a MongoDB
 const connectDB = async () => {
   try {

@@ -42,8 +42,23 @@ router.get('/stats', auth, async (req, res) => {
 // GET /api/courses/my-courses - Obtener cursos del docente autenticado
 router.get('/my-courses', auth, authorize('docente'), async (req, res) => {
   try {
+    // Teacher may be stored via User ID or Teacher ID
+    // Also check if Teacher has a userId that matches
+    let teacherIds = [req.userId];
+    
+    // If the logged-in user is from Teacher collection, check if they have a userId
+    const teacherDoc = await Teacher.findById(req.userId).select('userId').lean();
+    if (teacherDoc?.userId) {
+      teacherIds.push(teacherDoc.userId);
+    }
+    // Also check if there's a Teacher record whose userId matches
+    const teacherByUser = await Teacher.findOne({ userId: req.userId }).select('_id').lean();
+    if (teacherByUser) {
+      teacherIds.push(teacherByUser._id);
+    }
+    
     const courses = await Course.find({
-      teacher: req.userId,
+      teacher: { $in: teacherIds },
       isActive: true,
     })
       .populate('students', 'firstName lastName enrollmentNumber')
@@ -68,9 +83,14 @@ router.get('/', auth, async (req, res) => {
   try {
     let query = {};
     
-    // Si es docente, solo sus cursos
+    // Si es docente, solo sus cursos (check both User and Teacher IDs)
     if (req.user.role === 'docente') {
-      query.teacher = req.userId;
+      let teacherIds = [req.userId];
+      const teacherDoc = await Teacher.findById(req.userId).select('userId').lean();
+      if (teacherDoc?.userId) teacherIds.push(teacherDoc.userId);
+      const teacherByUser = await Teacher.findOne({ userId: req.userId }).select('_id').lean();
+      if (teacherByUser) teacherIds.push(teacherByUser._id);
+      query.teacher = { $in: teacherIds };
     }
     
     // Filtros
@@ -88,20 +108,31 @@ router.get('/', auth, async (req, res) => {
       query.isActive = true;
     }
 
-    let courses = await Course.find(query)
-      .populate('teacher', 'firstName lastName email')
-      .sort({ gradeLevel: 1, name: 1 });
-
-    // Para cursos sin teacher populated, intentar buscar en Teacher collection
-    for (let i = 0; i < courses.length; i++) {
-      if (courses[i].teacher === null && courses[i]._doc?.teacher) {
-        const teacherDoc = await Teacher.findById(courses[i]._doc.teacher).select('firstName lastName email');
-        if (teacherDoc) {
-          courses[i] = courses[i].toObject();
-          courses[i].teacher = teacherDoc;
-        }
+    // Save raw teacher ObjectIds BEFORE populate (populate replaces with null if not found in ref collection)
+    let coursesRaw = await Course.find(query).lean().sort({ gradeLevel: 1, name: 1 });
+    
+    // Populate teacher: check User collection first, then Teacher collection
+    for (let i = 0; i < coursesRaw.length; i++) {
+      const teacherId = coursesRaw[i].teacher;
+      if (!teacherId) continue;
+      
+      // Try User collection first
+      let teacherDoc = await User.findById(teacherId).select('firstName lastName email').lean();
+      
+      // If not in User, try Teacher collection
+      if (!teacherDoc) {
+        teacherDoc = await Teacher.findById(teacherId).select('firstName lastName email').lean();
       }
+      
+      // If still not found, try searching by userId in Teacher collection
+      if (!teacherDoc) {
+        teacherDoc = await Teacher.findOne({ userId: teacherId }).select('firstName lastName email').lean();
+      }
+      
+      coursesRaw[i].teacher = teacherDoc || null;
     }
+    
+    const courses = coursesRaw;
 
     res.json({
       success: true,
@@ -120,23 +151,32 @@ router.get('/', auth, async (req, res) => {
 // GET /api/courses/:id - Obtener un curso
 router.get('/:id', auth, async (req, res) => {
   try {
-    let course = await Course.findById(req.params.id)
-      .populate('teacher', 'firstName lastName email')
-      .populate('students', 'firstName lastName enrollmentNumber gradeLevel section');
+    let courseRaw = await Course.findById(req.params.id).lean();
 
-    if (!course) {
+    if (!courseRaw) {
       return res.status(404).json({ success: false, message: 'Curso no encontrado' });
     }
 
-    // Si teacher no se pobló (está en Teacher collection), buscar ahí
-    let result = course.toObject();
-    if (course.teacher === null && course._doc?.teacher) {
-      const teacherDoc = await Teacher.findById(course._doc.teacher).select('firstName lastName email').lean();
-      if (teacherDoc) result.teacher = teacherDoc;
-    } else if (!course.teacher && result.teacher) {
-      const teacherDoc = await Teacher.findById(result.teacher).select('firstName lastName email').lean();
-      if (teacherDoc) result.teacher = teacherDoc;
+    // Populate teacher: check User, then Teacher collection
+    if (courseRaw.teacher) {
+      let teacherDoc = await User.findById(courseRaw.teacher).select('firstName lastName email').lean();
+      if (!teacherDoc) {
+        teacherDoc = await Teacher.findById(courseRaw.teacher).select('firstName lastName email').lean();
+      }
+      if (!teacherDoc) {
+        teacherDoc = await Teacher.findOne({ userId: courseRaw.teacher }).select('firstName lastName email').lean();
+      }
+      courseRaw.teacher = teacherDoc || null;
     }
+    
+    // Populate students
+    if (courseRaw.students?.length > 0) {
+      const Student = require('../models').Student;
+      courseRaw.students = await Student.find({ _id: { $in: courseRaw.students } })
+        .select('firstName lastName enrollmentNumber gradeLevel section').lean();
+    }
+    
+    let result = courseRaw;
 
     res.json({ success: true, data: { course: result } });
   } catch (error) {

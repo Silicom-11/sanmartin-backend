@@ -793,7 +793,7 @@ router.post('/disconnect', auth, async (req, res) => {
     const notifications = [];
     for (const parentId of parentIds) {
       notifications.push({
-        user: parentId,
+        recipient: parentId,
         title: '📍 Desconexión detectada',
         message: `${student.firstName} ${student.lastName} se ha desconectado`,
         type: 'location_alert',
@@ -807,7 +807,7 @@ router.post('/disconnect', auth, async (req, res) => {
           timestamp: new Date(),
           action: 'open_child_location',
         },
-        read: false,
+        isRead: false,
       });
     }
 

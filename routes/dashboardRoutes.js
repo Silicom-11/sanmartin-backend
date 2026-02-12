@@ -12,23 +12,39 @@ router.get('/parent', auth, authorize('padre'), async (req, res) => {
     // Determinar si es Parent (nueva colección) o User antiguo
     let students = [];
     
-    // Intentar buscar en colección Parent primero
-    const parent = await Parent.findById(userId)
+    // Intentar buscar en colección Parent primero (by ID or by userId)
+    let parent = await Parent.findById(userId)
       .populate({
         path: 'children.student',
         select: 'firstName lastName fullName gradeLevel section photo courses',
         populate: { path: 'courses', select: 'name code' }
       });
     
+    if (!parent) {
+      parent = await Parent.findOne({ userId })
+        .populate({
+          path: 'children.student',
+          select: 'firstName lastName fullName gradeLevel section photo courses',
+          populate: { path: 'courses', select: 'name code' }
+        });
+    }
+    
     if (parent && parent.children && parent.children.length > 0) {
-      // Parent nuevo con array children
       students = parent.children
-        .filter(c => c.student) // Filtrar nulls
+        .filter(c => c.student)
         .map(c => c.student);
     } else {
-      // User antiguo con campo parent en Student
+      // User antiguo o Parent sin children → buscar en Student
       students = await Student.find({ parent: userId })
         .populate('courses', 'name code');
+      if (students.length === 0) {
+        // Parent might have a different _id
+        const parentDoc = await Parent.findOne({ userId }).select('_id');
+        if (parentDoc) {
+          students = await Student.find({ parent: parentDoc._id })
+            .populate('courses', 'name code');
+        }
+      }
     }
 
     // Estadísticas por estudiante
@@ -52,17 +68,17 @@ router.get('/parent', auth, authorize('padre'), async (req, res) => {
       const grades = await Grade.find({
         student: student._id,
         academicYear: year,
-        isPublished: true,
+        status: 'publicado',
       });
 
       const avgFinal = grades.length > 0
-        ? (grades.reduce((sum, g) => sum + g.averages.final, 0) / grades.length).toFixed(1)
+        ? (grades.reduce((sum, g) => sum + (g.average || 0), 0) / grades.length).toFixed(1)
         : '-';
 
       // Justificaciones pendientes
       const pendingJustifications = await Justification.countDocuments({
         student: student._id,
-        status: 'pendiente',
+        status: 'pending',
       });
 
       return {
@@ -117,8 +133,15 @@ router.get('/teacher', auth, authorize('docente'), async (req, res) => {
   try {
     const userId = req.userId;
     
+    // Resolve teacher IDs (dual collection problem)
+    let teacherIds = [userId];
+    const teacherDoc = await Teacher.findById(userId).select('userId').lean();
+    if (teacherDoc?.userId) teacherIds.push(teacherDoc.userId);
+    const teacherByUser = await Teacher.findOne({ userId }).select('_id').lean();
+    if (teacherByUser) teacherIds.push(teacherByUser._id);
+    
     // Cursos del docente
-    const courses = await Course.find({ teacher: userId, isActive: true })
+    const courses = await Course.find({ teacher: { $in: teacherIds }, isActive: true })
       .populate('students', 'firstName lastName');
 
     // Estadísticas por curso
@@ -142,7 +165,7 @@ router.get('/teacher', auth, authorize('docente'), async (req, res) => {
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     const todayAttendance = await Attendance.find({
-      teacher: userId,
+      teacher: { $in: teacherIds },
       date: { $gte: today, $lt: tomorrow },
     });
 
@@ -151,13 +174,13 @@ router.get('/teacher', auth, authorize('docente'), async (req, res) => {
 
     // Calificaciones pendientes de publicar
     const pendingGrades = await Grade.countDocuments({
-      teacher: userId,
-      isPublished: false,
+      teacher: { $in: teacherIds },
+      status: { $ne: 'publicado' },
     });
 
     // Justificaciones por revisar
     const pendingJustifications = await Justification.countDocuments({
-      status: 'pendiente',
+      status: 'pending',
     });
 
     // Notificaciones
@@ -283,9 +306,13 @@ router.get('/student', auth, authorize('estudiante'), async (req, res) => {
     const startDate = new Date(year, 0, 1);
     const endDate = new Date();
 
-    // Buscar estudiante asociado al usuario (campo correcto: userAccount)
-    const student = await Student.findOne({ userAccount: userId })
+    // Buscar estudiante asociado al usuario
+    let student = await Student.findById(userId)
       .populate('courses', 'name code schedule');
+    if (!student) {
+      student = await Student.findOne({ userAccount: userId })
+        .populate('courses', 'name code schedule');
+    }
 
     // Si no hay estudiante vinculado, crear datos básicos
     const studentData = student || { 
@@ -344,14 +371,14 @@ router.get('/student', auth, authorize('estudiante'), async (req, res) => {
     const allGrades = await Grade.find({
       student: student?._id || userId,
       academicYear: year,
-      isPublished: true,
+      status: 'publicado',
     });
     
     let avgSum = 0;
     let avgCount = 0;
     allGrades.forEach(g => {
-      if (g.averages && g.averages.final) {
-        avgSum += g.averages.final;
+      if (g.average) {
+        avgSum += g.average;
         avgCount++;
       }
     });

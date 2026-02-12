@@ -21,12 +21,25 @@ router.get('/children', auth, authorize('padre'), async (req, res) => {
       
       if (parent && parent.children) {
         children = parent.children
-          .filter(c => c.student) // Filtrar null values
+          .filter(c => c.student)
           .map(c => c.student);
       }
-    } 
-    // Si es un User antiguo con método getChildren
-    else if (req.user.getChildren) {
+    }
+    // Si no encontró, buscar Parent por userId
+    if (children.length === 0) {
+      const parentByUserId = await Parent.findOne({ userId: req.userId })
+        .populate({
+          path: 'children.student',
+          select: 'firstName lastName dni gender photo birthDate gradeLevel section',
+        });
+      if (parentByUserId && parentByUserId.children) {
+        children = parentByUserId.children
+          .filter(c => c.student)
+          .map(c => c.student);
+      }
+    }
+    // Fallback: User antiguo con método getChildren
+    if (children.length === 0 && req.user.getChildren) {
       children = await req.user.getChildren();
     }
     
@@ -67,13 +80,13 @@ router.get('/children', auth, authorize('padre'), async (req, res) => {
         const attendanceThisMonth = await Attendance.countDocuments({
           student: child._id,
           date: { $gte: startOfMonth },
-          status: 'presente',
+          status: 'present',
         });
         
         const absencesThisMonth = await Attendance.countDocuments({
           student: child._id,
           date: { $gte: startOfMonth },
-          status: { $in: ['ausente', 'justificado'] },
+          status: { $in: ['absent', 'justified'] },
         });
         
         return {
@@ -117,6 +130,26 @@ router.get('/children/:childId', auth, authorize('padre'), async (req, res) => {
       isParentOf = req.user.children.some(c => {
         const studentId = c.student?._id || c.student;
         return studentId.toString() === req.params.childId;
+      });
+    }
+    
+    // Also check Parent collection by userId
+    if (!isParentOf) {
+      const parentDoc = await Parent.findOne({ userId: req.userId })
+        .select('children').lean();
+      if (parentDoc?.children) {
+        isParentOf = parentDoc.children.some(c => {
+          const sid = c.student?.toString() || c.student;
+          return sid === req.params.childId;
+        });
+      }
+    }
+    
+    // Also check User.students array
+    if (!isParentOf && req.user.students && Array.isArray(req.user.students)) {
+      isParentOf = req.user.students.some(s => {
+        const sid = s?._id?.toString() || s?.toString();
+        return sid === req.params.childId;
       });
     }
     

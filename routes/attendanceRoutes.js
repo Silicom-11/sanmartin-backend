@@ -2,7 +2,17 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { Attendance, Course, Student } = require('../models');
+const { Attendance, Course, Student, Teacher } = require('../models');
+
+// Helper: resolve all possible teacher IDs (dual collection problem)
+const getTeacherIds = async (userId) => {
+  const ids = [userId];
+  const teacherDoc = await Teacher.findById(userId).select('userId').lean();
+  if (teacherDoc?.userId) ids.push(teacherDoc.userId);
+  const teacherByUser = await Teacher.findOne({ userId }).select('_id').lean();
+  if (teacherByUser) ids.push(teacherByUser._id);
+  return ids;
+};
 const { auth, authorize, isTeacherOrAdmin } = require('../middleware/auth');
 
 // GET /api/attendance/stats - Estadísticas de asistencia de hoy
@@ -150,9 +160,10 @@ router.get('/', auth, async (req, res) => {
       query.status = req.query.status;
     }
     
-    // Si es docente, solo sus cursos
+    // Si es docente, solo sus cursos (check both User and Teacher IDs)
     if (req.user.role === 'docente') {
-      query.teacher = req.userId;
+      const teacherIds = await getTeacherIds(req.userId);
+      query.teacher = { $in: teacherIds };
     }
 
     const attendance = await Attendance.find(query)
