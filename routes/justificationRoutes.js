@@ -464,7 +464,26 @@ router.post('/', auth, authorize('padre'), upload.array('documents', 5), async (
       reason: resolvedReason,
       observations: observations || '',
       documents,
+      status: 'approved',
+      reviewedAt: new Date(),
     });
+
+    // Auto-justify attendance records for these dates
+    try {
+      const Attendance = require('../models').Attendance;
+      for (const jDate of justificationDates) {
+        const dayStart = new Date(jDate);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(jDate);
+        dayEnd.setHours(23, 59, 59, 999);
+        await Attendance.updateMany(
+          { student: studentId, date: { $gte: dayStart, $lte: dayEnd }, status: { $in: ['absent', 'late'] } },
+          { $set: { status: 'justified', justification: justification._id, observations: `Justificado: ${resolvedReason}` } }
+        );
+      }
+    } catch (attErr) {
+      console.error('Auto-justify attendance error:', attErr);
+    }
 
     await justification.populate([
       { path: 'student', select: 'firstName lastName gradeLevel section' },
