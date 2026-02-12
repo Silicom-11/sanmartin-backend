@@ -201,7 +201,7 @@ router.get('/stats', auth, authorize('administrativo', 'docente'), async (req, r
 });
 
 // ============ GET /api/justifications/approved-for-date ============
-// Returns map of studentId → justification info for all approved justifications on a date
+// Returns map of studentId → justification info for all justifications on a date
 // Used by attendance screen to auto-mark justified students
 router.get('/approved-for-date', auth, async (req, res) => {
   try {
@@ -216,7 +216,6 @@ router.get('/approved-for-date', auth, async (req, res) => {
     endDate.setDate(endDate.getDate() + 1);
 
     const justifications = await Justification.find({
-      status: 'approved',
       dates: { $elemMatch: { $gte: targetDate, $lt: endDate } },
     })
       .populate('student', 'firstName lastName')

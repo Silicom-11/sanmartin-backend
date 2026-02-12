@@ -216,6 +216,21 @@ app.use((err, req, res, next) => {
 // Iniciar servidor
 const startServer = async () => {
   await connectDB();
+
+  // One-time migration: update all pending justifications to approved
+  try {
+    const { Justification } = require('./models');
+    const result = await Justification.updateMany(
+      { status: 'pending' },
+      { $set: { status: 'approved', reviewedAt: new Date() } }
+    );
+    if (result.modifiedCount > 0) {
+      console.log(`📋 Migración: ${result.modifiedCount} justificaciones pendientes → aprobadas`);
+    }
+  } catch (migErr) {
+    console.error('Migration error:', migErr.message);
+  }
+
   app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
     console.log(`📍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
