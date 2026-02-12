@@ -5,7 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { Justification, Attendance, Student, Notification } = require('../models');
+const { Justification, Attendance, Student, Notification, Parent } = require('../models');
 const { auth, authorize } = require('../middleware/auth');
 const r2Storage = require('../services/r2Storage');
 
@@ -192,7 +192,8 @@ router.get('/approved-for-date', auth, async (req, res) => {
       dates: { $elemMatch: { $gte: targetDate, $lt: endDate } },
     })
       .populate('student', 'firstName lastName')
-      .select('student reason dates documents');
+      .populate('parent', 'firstName lastName')
+      .select('student parent reason dates documents observations createdAt');
 
     const justifiedStudents = {};
     justifications.forEach(j => {
@@ -201,7 +202,17 @@ router.get('/approved-for-date', auth, async (req, res) => {
         justifiedStudents[sid] = {
           reason: j.reason,
           hasDocuments: (j.documents || []).length > 0,
+          documentCount: (j.documents || []).length,
           justificationId: j._id,
+          parentName: j.parent ? `${j.parent.firstName} ${j.parent.lastName}` : null,
+          observations: j.observations || null,
+          documents: (j.documents || []).map(doc => ({
+            name: doc.originalName || doc.filename,
+            url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+            mimetype: doc.mimetype,
+            storage: doc.storage,
+          })),
+          createdAt: j.createdAt,
         };
       }
     });
@@ -209,6 +220,62 @@ router.get('/approved-for-date', auth, async (req, res) => {
     res.json({ success: true, data: justifiedStudents });
   } catch (error) {
     console.error('Get approved justifications error:', error);
+    res.status(500).json({ success: false, message: 'Error' });
+  }
+});
+
+// ============ GET /api/justifications/for-date ============
+// Returns ALL justifications (any status) for a date - for attendance eye icon
+router.get('/for-date', auth, async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ success: false, message: 'date es requerido' });
+    }
+
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(targetDate);
+    endDate.setDate(endDate.getDate() + 1);
+
+    const justifications = await Justification.find({
+      dates: { $elemMatch: { $gte: targetDate, $lt: endDate } },
+    })
+      .populate('student', 'firstName lastName gradeLevel section')
+      .populate('parent', 'firstName lastName email phone')
+      .select('student parent reason dates documents observations status createdAt reviewedAt reviewNote')
+      .sort({ createdAt: -1 });
+
+    const result = {};
+    justifications.forEach(j => {
+      const sid = j.student?._id?.toString();
+      if (sid) {
+        result[sid] = {
+          justificationId: j._id,
+          status: j.status,
+          reason: j.reason,
+          observations: j.observations || null,
+          parentName: j.parent ? `${j.parent.firstName} ${j.parent.lastName}` : null,
+          parentEmail: j.parent?.email,
+          parentPhone: j.parent?.phone,
+          documents: (j.documents || []).map(doc => ({
+            name: doc.originalName || doc.filename,
+            url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+            mimetype: doc.mimetype,
+            size: doc.size,
+            storage: doc.storage,
+          })),
+          documentCount: (j.documents || []).length,
+          createdAt: j.createdAt,
+          reviewedAt: j.reviewedAt,
+          reviewNote: j.reviewNote,
+        };
+      }
+    });
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Get justifications for date error:', error);
     res.status(500).json({ success: false, message: 'Error' });
   }
 });
@@ -274,9 +341,39 @@ router.post('/', auth, authorize('padre'), upload.array('documents', 5), async (
     }
 
     const parentId = req.userId.toString();
-    const isLinked =
-      student.parent?.toString() === parentId ||
-      (student.guardians || []).some(g => g.toString() === parentId);
+    let isLinked = false;
+
+    // Check 1: Student.parent field
+    if (student.parent?.toString() === parentId) {
+      isLinked = true;
+    }
+
+    // Check 2: Student.guardians array (each guardian has .user and .parent fields)
+    if (!isLinked && student.guardians?.length > 0) {
+      isLinked = student.guardians.some(g => 
+        g.user?.toString() === parentId || g.parent?.toString() === parentId
+      );
+    }
+
+    // Check 3: Parent collection — parent.children[].student
+    if (!isLinked) {
+      const Parent = require('../models/Parent');
+      const parentRecord = await Parent.findById(parentId);
+      if (parentRecord?.children?.length > 0) {
+        isLinked = parentRecord.children.some(c => c.student?.toString() === studentId.toString());
+      }
+    }
+
+    // Check 4: Parent collection — find any parent doc that has this user AND this student
+    if (!isLinked) {
+      const Parent = require('../models/Parent');
+      const parentByEmail = await Parent.findOne({ 'children.student': studentId });
+      if (parentByEmail && parentByEmail._id.toString() === parentId) {
+        isLinked = true;
+      }
+    }
+
+    console.log(`🔍 Justification access check: parent=${parentId}, student=${studentId}, isLinked=${isLinked}`);
 
     if (!isLinked) {
       return res.status(403).json({ success: false, message: 'No tiene acceso a este estudiante' });
