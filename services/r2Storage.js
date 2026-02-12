@@ -68,13 +68,9 @@ const uploadFile = async (buffer, originalName, mimetype, folder = 'uploads') =>
   // Don't store the S3 API endpoint as URL — it requires auth.
   // Instead, store the key and generate presigned URLs on demand.
   // Only use R2_PUBLIC_URL if a custom domain/R2.dev is configured.
-  const publicUrl = process.env.R2_PUBLIC_URL
-    ? `${process.env.R2_PUBLIC_URL}/${uniqueName}`
-    : null; // Will use presigned URLs via getFileUrl()
-
   return {
     key: uniqueName,
-    url: publicUrl,
+    url: null, // Always use proxy endpoint, never direct R2 URLs
     filename: originalName,
     size: buffer.length,
     storage: 'r2',
@@ -128,13 +124,18 @@ const deleteFile = async (key) => {
  */
 const getFileUrl = (key) => {
   if (!key) return null;
-  if (key.startsWith('http')) return key; // Already a full URL
-  if (process.env.R2_PUBLIC_URL) {
-    return `${process.env.R2_PUBLIC_URL}/${key}`;
+  // If it's a direct R2/S3 URL, extract the key and route through proxy
+  if (key.startsWith('http')) {
+    const r2Match = key.match(/r2\.cloudflarestorage\.com\/(.+)/);
+    if (r2Match) {
+      key = decodeURIComponent(r2Match[1]);
+    } else {
+      return key; // Non-R2 URL, return as-is
+    }
   }
-  // For R2 keys without public URL, serve through our proxy endpoint
+  // Always use proxy endpoint for R2 files (direct R2 URLs require auth)
   if (isR2Configured() && !key.startsWith('/')) {
-    return `/api/uploads/r2/${encodeURIComponent(key)}`;
+    return `/api/uploads/r2/${key}`;
   }
   return `/uploads/${key}`;
 };

@@ -94,9 +94,9 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // R2 file proxy — streams files from Cloudflare R2 to the client
 const r2Storage = require('./services/r2Storage');
-app.get('/api/uploads/r2/:key(*)', async (req, res) => {
+app.get('/api/uploads/r2/{*key}', async (req, res) => {
   try {
-    const key = decodeURIComponent(req.params.key);
+    const key = decodeURIComponent(req.params.key.replace(/^\//, ''));
     if (!r2Storage.isR2Configured()) {
       return res.status(404).json({ success: false, message: 'R2 not configured' });
     }

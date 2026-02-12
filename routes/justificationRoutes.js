@@ -109,7 +109,7 @@ router.get('/', auth, async (req, res) => {
       }
       obj.documents = (obj.documents || []).map(doc => ({
         ...doc,
-        url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : (doc.path ? `/uploads/${doc.path}` : null)),
+        url: doc.key ? r2Storage.getFileUrl(doc.key) : (doc.url || (doc.path ? `/uploads/${doc.path}` : null)),
       }));
       result.push(obj);
     }
@@ -141,7 +141,7 @@ router.get('/student/:studentId', auth, async (req, res) => {
       }
       obj.documents = (obj.documents || []).map(doc => ({
         ...doc,
-        url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+        url: doc.key ? r2Storage.getFileUrl(doc.key) : (doc.url || null),
       }));
       result.push(obj);
     }
@@ -167,7 +167,7 @@ router.get('/my-justifications', auth, async (req, res) => {
       const obj = j.toObject();
       obj.documents = (obj.documents || []).map(doc => ({
         ...doc,
-        url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+        url: doc.key ? r2Storage.getFileUrl(doc.key) : (doc.url || null),
       }));
       return obj;
     });
@@ -244,7 +244,7 @@ router.get('/approved-for-date', auth, async (req, res) => {
         observations: j.observations || null,
         documents: (j.documents || []).map(doc => ({
           name: doc.originalName || doc.filename,
-          url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+          url: doc.key ? r2Storage.getFileUrl(doc.key) : (doc.url || null),
           mimetype: doc.mimetype,
           storage: doc.storage,
         })),
@@ -302,7 +302,7 @@ router.get('/for-date', auth, async (req, res) => {
         parentPhone: parentDoc?.phone,
         documents: (j.documents || []).map(doc => ({
           name: doc.originalName || doc.filename,
-          url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+          url: doc.key ? r2Storage.getFileUrl(doc.key) : (doc.url || null),
           mimetype: doc.mimetype,
           size: doc.size,
           storage: doc.storage,
@@ -355,7 +355,7 @@ router.get('/:id', auth, async (req, res) => {
 
     obj.documents = (obj.documents || []).map(doc => ({
       ...doc,
-      url: doc.url || (doc.key ? r2Storage.getFileUrl(doc.key) : null),
+      url: doc.key ? r2Storage.getFileUrl(doc.key) : (doc.url || null),
     }));
 
     res.json({ success: true, data: { justification: obj } });
