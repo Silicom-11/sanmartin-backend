@@ -215,13 +215,20 @@ router.get('/approved-for-date', auth, async (req, res) => {
     const endDate = new Date(targetDate);
     endDate.setDate(endDate.getDate() + 1);
 
+    console.log(`📋 approved-for-date: buscando justificaciones para ${date} (${targetDate.toISOString()} - ${endDate.toISOString()})`);
+
     const justifications = await Justification.find({
       dates: { $elemMatch: { $gte: targetDate, $lt: endDate } },
     })
       .populate('student', 'firstName lastName')
       .populate('parent', 'firstName lastName')
-      .select('student parent reason dates documents observations createdAt')
+      .select('student parent reason dates documents observations createdAt status')
       .lean();
+
+    console.log(`📋 approved-for-date: encontró ${justifications.length} justificaciones`);
+    justifications.forEach(j => {
+      console.log(`  → student=${j.student?.firstName} ${j.student?.lastName} (${j.student?._id}), status=${j.status}, dates=${j.dates?.map(d => d.toISOString()).join(',')}`);
+    });
 
     const justifiedStudents = {};
     for (const j of justifications) {
